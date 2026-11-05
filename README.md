@@ -131,3 +131,5 @@ pytest -q
 ## License
 
 MIT — see `LICENSE`. No self-update. No secrets.
+
+Built by Michael McClanahan (@tnvolman)
