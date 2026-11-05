@@ -4,8 +4,9 @@ description: >
   Dry-run mode for Hermes Agent. While Ghost Mode is on, file writes/edits/deletes
   and terminal tools are redirected into a throwaway copy of the working folder;
   network-touching tools and commands are blocked. Review the diff, then apply
-  selected paths or discard. Slash: /ghost on|off|status. CLI: hermes ghost
-  diff|apply|discard|ui.
+  selected paths or discard. Optional thin Verify runs one configured test in
+  the ghost copy (advisory; Apply stays human). Slash: /ghost on|off|status.
+  CLI: hermes ghost diff|verify|apply|discard|ui.
 author: "Plugin Parker (tnvolman)"
 kind: standalone
 license: MIT

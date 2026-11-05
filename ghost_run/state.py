@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 _SESSION_ENV = "GHOST_RUN_SESSION_FILE"
 
@@ -29,6 +29,8 @@ class GhostState:
     # Memory-only; not persisted (per tool-call within one agent process).
     pending_block: Optional[str] = None
     flags: list[str] = field(default_factory=list)
+    # Last thin-Verify result (advisory). Persisted so the UI can reload it.
+    last_verify: Optional[dict] = None
 
     def clear_session(self) -> None:
         self.enabled = False
@@ -36,6 +38,7 @@ class GhostState:
         self.ghost_root = None
         self.pending_block = None
         self.flags.clear()
+        self.last_verify = None
         _delete_session_file()
 
     def save(self) -> None:
@@ -50,6 +53,7 @@ class GhostState:
             "keep": not bool(self.enabled),
             "real_root": str(self.real_root.resolve()),
             "ghost_root": str(self.ghost_root.resolve()),
+            "verify": self.last_verify,
         }
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
@@ -66,15 +70,27 @@ def _delete_session_file() -> None:
         pass
 
 
-def _load_from_disk(state: GhostState) -> None:
+def _read_session_payload() -> Optional[dict]:
     path = _default_session_path()
     if not path.is_file():
-        return
+        return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _apply_verify(state: GhostState, data: dict) -> None:
+    if "verify" not in data:
         return
-    if not isinstance(data, dict):
+    verify: Any = data.get("verify")
+    state.last_verify = verify if isinstance(verify, dict) else None
+
+
+def _load_from_disk(state: GhostState) -> None:
+    data = _read_session_payload()
+    if not data:
         return
     real = Path(str(data.get("real_root") or ""))
     ghost = Path(str(data.get("ghost_root") or ""))
@@ -85,12 +101,22 @@ def _load_from_disk(state: GhostState) -> None:
     state.ghost_root = ghost
     # Remapping only when enabled=true; keep sessions still allow diff/apply.
     state.enabled = bool(data.get("enabled"))
+    _apply_verify(state, data)
 
 
 def get_state() -> GhostState:
-    """Return session singleton, loading disk when memory has no roots yet."""
+    """Return session singleton, loading disk when memory has no roots yet.
+
+    When roots are already in memory, the last Verify result is still refreshed
+    from the session file so a CLI ``hermes ghost verify`` is visible to the UI
+    process on its next request.
+    """
     if _STATE.real_root is None or _STATE.ghost_root is None:
         _load_from_disk(_STATE)
+    else:
+        data = _read_session_payload()
+        if data is not None:
+            _apply_verify(_STATE, data)
     return _STATE
 
 
@@ -101,4 +127,5 @@ def reset_state() -> None:
     _STATE.ghost_root = None
     _STATE.pending_block = None
     _STATE.flags.clear()
+    _STATE.last_verify = None
     _delete_session_file()

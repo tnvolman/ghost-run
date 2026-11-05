@@ -12,17 +12,28 @@ from .report import write_html_report
 from .sandbox import create_ghost_copy, discard_ghost_copy
 from .state import get_state
 from .ui_server import DEFAULT_HOST, DEFAULT_PORT, serve
+from .verify import format_verify, run_verify
 
 
 def _status_text() -> str:
     state = get_state()
     if not state.enabled:
-        return "Ghost Mode: OFF"
-    return (
-        f"Ghost Mode: ON\n"
-        f"  real:  {state.real_root}\n"
-        f"  ghost: {state.ghost_root}"
-    )
+        base = "Ghost Mode: OFF"
+    else:
+        base = (
+            f"Ghost Mode: ON\n"
+            f"  real:  {state.real_root}\n"
+            f"  ghost: {state.ghost_root}"
+        )
+    verify = state.last_verify or {}
+    status = verify.get("status")
+    if status == "pass":
+        base += "\n  verify: Pass"
+    elif status == "fail":
+        base += "\n  verify: Fail"
+    elif status == "error" and verify.get("error"):
+        base += f"\n  verify: {verify.get('error')}"
+    return base
 
 
 def turn_on(real_root: Optional[Path] = None) -> str:
@@ -41,6 +52,7 @@ def turn_on(real_root: Optional[Path] = None) -> str:
     state.ghost_root = ghost
     state.pending_block = None
     state.flags.clear()
+    state.last_verify = None
     from .risk import clear_blocks
 
     clear_blocks()
@@ -51,7 +63,7 @@ def turn_on(real_root: Optional[Path] = None) -> str:
         f"  ghost: {ghost}\n"
         f"File/terminal tools now write into the ghost copy. "
         f"Network tools/commands are blocked. "
-        f"Use /ghost status, hermes ghost diff|apply|discard when done."
+        f"Use /ghost status, hermes ghost diff|verify|apply|discard when done."
     )
 
 
@@ -88,6 +100,8 @@ def slash_ghost(raw_args: str) -> str:
         return _status_text()
     if cmd == "diff":
         return cli_diff()
+    if cmd == "verify":
+        return format_verify(run_verify(get_state()))
     if cmd == "discard":
         return discard_session(get_state())
     if cmd == "apply":
@@ -101,10 +115,10 @@ def slash_ghost(raw_args: str) -> str:
         # Non-blocking hint — full server via CLI `hermes ghost ui`
         return (
             "Start the interactive pane with: hermes ghost ui\n"
-            "Then open http://127.0.0.1:8765/ (Apply selected / Discard)."
+            "Then open http://127.0.0.1:8765/ (Verify / Apply selected / Discard)."
         )
     return (
-        "Usage: /ghost on|off|status|diff|apply [paths...]|discard|ui\n"
+        "Usage: /ghost on|off|status|diff|verify|apply [paths...]|discard|ui\n"
         f"Unknown subcommand: {cmd!r}"
     )
 
@@ -125,6 +139,10 @@ def setup_cli(subparser: argparse.ArgumentParser) -> None:
 
     sub.add_parser("status", help="Show Ghost Mode status")
     sub.add_parser("diff", help="Show ghost vs real diff (+ write HTML)")
+    sub.add_parser(
+        "verify",
+        help="Run the configured test in the ghost copy (advisory; does not block apply)",
+    )
     sub.add_parser("discard", help="Delete the ghost sandbox and turn off")
 
     apply_p = sub.add_parser(
@@ -173,6 +191,9 @@ def handle_cli(args: argparse.Namespace) -> None:
         return
     if action == "diff":
         print(cli_diff())
+        return
+    if action == "verify":
+        print(format_verify(run_verify(get_state())), end="")
         return
     if action == "discard":
         print(discard_session(get_state()))

@@ -1,0 +1,4 @@
+# Ghost Run thin Verify — one command, executed with cwd = the ghost copy.
+# GHOST_RUN_TEST wins over this file when it is set.
+# First non-empty, non-comment line is the command.
+python3 scripts/ghost_verify.py

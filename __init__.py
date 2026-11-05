@@ -26,16 +26,17 @@ def register(ctx) -> None:
     ctx.register_command(
         "ghost",
         slash_ghost,
-        description="Ghost Run dry-run mode: on|off|status|diff|apply|discard",
-        args_hint="on|off|status|diff|apply [paths...]|discard",
+        description="Ghost Run dry-run mode: on|off|status|diff|verify|apply|discard",
+        args_hint="on|off|status|diff|verify|apply [paths...]|discard",
     )
     ctx.register_cli_command(
         "ghost",
-        help="Ghost Run dry-run sandbox (diff / apply / discard)",
+        help="Ghost Run dry-run sandbox (diff / verify / apply / discard)",
         setup_fn=setup_cli,
         handler_fn=handle_cli,
         description=(
             "Redirect file and terminal tools into a throwaway copy of the "
-            "working folder, review the diff, then apply selected paths or discard."
+            "working folder, review the diff, optionally verify with one configured "
+            "test, then apply selected paths or discard."
         ),
     )
