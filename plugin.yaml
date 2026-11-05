@@ -7,7 +7,7 @@ description: >
   selected paths or discard. Optional thin Verify runs one configured test in
   the ghost copy (advisory; Apply stays human). Slash: /ghost on|off|status.
   CLI: hermes ghost diff|verify|apply|discard|ui.
-author: "Plugin Parker (tnvolman)"
+author: "Michael McClanahan (@tnvolman)"
 kind: standalone
 license: MIT
 homepage: ""
