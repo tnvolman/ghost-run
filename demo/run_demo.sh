@@ -2,6 +2,9 @@
 # Ghost Run — deterministic ~90s demo runner (local only).
 # Uses openrouter/free via HERMES_MODEL_API_KEY / OPENROUTER_API_KEY.
 # Never prints the API key.
+# Thin Verify (README beat 5) runs between the pane screenshot and Apply:
+# Pass on the healthy fixture, Fail after deleting ghost index.html, then
+# restore. Apply still runs — Verify is advisory. Stdlib fixture command only.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,6 +13,7 @@ FIX="$DEMO_DIR/fixture"
 WORK="$(mktemp -d /tmp/ghost-demo-XXXXXX)"
 SESSION="$DEMO_DIR/.demo-session.json"
 UI_PORT="${GHOST_UI_PORT:-8765}"
+export UI_PORT
 LOG="$DEMO_DIR/demo-run.log"
 PANE_PNG="$DEMO_DIR/pane.png"
 TIMING_JSON="$DEMO_DIR/copy-timing.json"
@@ -103,29 +107,15 @@ PY
 echo "Beat 4: ghost diff" | tee -a "$LOG"
 python -c 'from ghost_run.commands import cli_diff; print(cli_diff())' | tee -a "$LOG"
 
-echo "Beat 5: ghost ui + screenshot -> $PANE_PNG" | tee -a "$LOG"
-UI_LOG="$DEMO_DIR/.ui-server.log"
-python -m ghost_run.ui_server --host 127.0.0.1 --port "$UI_PORT" >"$UI_LOG" 2>&1 &
-UI_PID=$!
-echo "$UI_PID" > "$DEMO_DIR/.ui.pid"
-echo "$UI_PORT" > "$DEMO_DIR/.ui.port"
-for i in $(seq 1 20); do
-  if curl -fsS "http://127.0.0.1:$UI_PORT/api/health" >/dev/null 2>&1; then
-    echo "UI up on http://127.0.0.1:$UI_PORT/ (pid $UI_PID)" | tee -a "$LOG"
-    break
-  fi
-  sleep 0.25
-done
-curl -fsS "http://127.0.0.1:$UI_PORT/api/health" | tee -a "$LOG"
-echo | tee -a "$LOG"
-
-export PANE_PNG
-export PANE_URL="http://127.0.0.1:$UI_PORT/"
-python - <<'PY' | tee -a "$LOG"
+# Headless pane screenshot. Requires PANE_PNG and PANE_URL.
+# Playwright honors PANE_WAIT_SELECTOR when set (default: pane content).
+capture_pane() {
+  python - <<'PY'
 import os, sys, shutil, subprocess, time
 from pathlib import Path
 out = Path(os.environ["PANE_PNG"])
 url = os.environ["PANE_URL"]
+wait_sel = os.environ.get("PANE_WAIT_SELECTOR") or "h1, .badge, .row"
 ok = False
 try:
     from playwright.sync_api import sync_playwright
@@ -133,7 +123,7 @@ try:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1280, "height": 800})
         page.goto(url, wait_until="networkidle", timeout=20000)
-        page.wait_for_selector("h1, .badge, .row", timeout=10000)
+        page.wait_for_selector(wait_sel, timeout=10000)
         time.sleep(0.5)
         page.screenshot(path=str(out), full_page=True)
         browser.close()
@@ -182,20 +172,108 @@ if not ok:
 assert out.is_file() and out.stat().st_size > 500, "pane.png missing/too small"
 print(f"SCREENSHOT_OK {out}")
 PY
+}
 
-echo "Beat 6: apply selected (3 deletions) via UI API" | tee -a "$LOG"
+echo "Beat 5: ghost ui + screenshot -> $PANE_PNG" | tee -a "$LOG"
+UI_LOG="$DEMO_DIR/.ui-server.log"
+python -m ghost_run.ui_server --host 127.0.0.1 --port "$UI_PORT" >"$UI_LOG" 2>&1 &
+UI_PID=$!
+echo "$UI_PID" > "$DEMO_DIR/.ui.pid"
+echo "$UI_PORT" > "$DEMO_DIR/.ui.port"
+for i in $(seq 1 20); do
+  if curl -fsS "http://127.0.0.1:$UI_PORT/api/health" >/dev/null 2>&1; then
+    echo "UI up on http://127.0.0.1:$UI_PORT/ (pid $UI_PID)" | tee -a "$LOG"
+    break
+  fi
+  sleep 0.25
+done
+curl -fsS "http://127.0.0.1:$UI_PORT/api/health" | tee -a "$LOG"
+echo | tee -a "$LOG"
+
+export PANE_PNG
+export PANE_URL="http://127.0.0.1:$UI_PORT/"
+capture_pane | tee -a "$LOG"
+
+# README manual beat 5. Same path as `/ghost verify` / `hermes ghost verify`:
+# slash_ghost("verify") -> run_verify. Fixture `.ghost-run-test` is stdlib-only
+# (`python3 scripts/ghost_verify.py`); no node_modules. GHOST_RUN_TEST is ignored
+# here so the demo always runs that fixture command. Thin Verify is advisory.
+echo "Beat 6: thin Verify, Pass on a healthy ghost copy (README beat 5)" | tee -a "$LOG"
 python - <<'PY' | tee -a "$LOG"
-import json, urllib.request
+import os
+os.environ.pop("GHOST_RUN_TEST", None)
+from ghost_run.commands import slash_ghost
+from ghost_run.state import get_state
+
+text = slash_ghost("verify")
+print(text, end="" if text.endswith("\n") else "\n")
+passed = get_state().last_verify or {}
+assert passed.get("status") == "pass", passed
+assert passed.get("advisory") is True
+assert passed.get("exit_code") == 0
+assert passed.get("command") == "python3 scripts/ghost_verify.py"
+assert "fixture healthy" in (passed.get("log") or "")
+print("VERIFY_PASS")
+PY
+echo "GET /api/verify after Pass" | tee -a "$LOG"
+curl -fsS "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
+echo | tee -a "$LOG"
+echo "recapture pane.png with Verify Pass banner" | tee -a "$LOG"
+export PANE_WAIT_SELECTOR="#verifyBanner.pass"
+capture_pane | tee -a "$LOG"
+unset PANE_WAIT_SELECTOR
+
+echo "Beat 6b: break ghost index.html, expect Fail, restore (Apply stays allowed)" | tee -a "$LOG"
+python - <<'PY' | tee -a "$LOG"
+import os
+os.environ.pop("GHOST_RUN_TEST", None)
+from ghost_run.state import get_state
+from ghost_run.verify import format_verify, run_verify
+
+state = get_state()
+ghost = state.ghost_root
+real = state.real_root
+assert ghost is not None and real is not None
+target = ghost / "index.html"
+assert target.is_file(), "ghost index.html missing before break"
+backup = target.read_bytes()
+target.unlink()
+try:
+    failed = run_verify(state)
+    print(format_verify(failed), end="")
+    assert failed.get("status") == "fail", failed
+    assert failed.get("advisory") is True
+    assert failed.get("exit_code") not in (0, None)
+    assert "missing index.html" in (failed.get("log") or "")
+    assert (real / "index.html").is_file(), "real index.html was modified"
+    print("VERIFY_FAIL")
+finally:
+    target.write_bytes(backup)
+assert target.is_file()
+assert get_state().last_verify["status"] == "fail"
+print("restored ghost index.html; Apply still allowed after Fail")
+PY
+echo "GET /api/verify after Fail" | tee -a "$LOG"
+curl -fsS "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
+echo | tee -a "$LOG"
+
+echo "Beat 7: apply selected (3 deletions) via UI API after Verify Fail" | tee -a "$LOG"
+python - <<'PY' | tee -a "$LOG"
+import json, os, urllib.request
+from ghost_run.state import get_state
+verify = get_state().last_verify or {}
+assert verify.get("status") == "fail", verify
+assert verify.get("advisory") is True
+print("apply after Verify Fail (advisory; Apply stays available)")
 paths = ["src/unused_legacy.js", "src/old_helper.js", "tmp/cache.tmp"]
 req = urllib.request.Request(
-    "http://127.0.0.1:8765/api/apply",
+    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/apply",
     data=json.dumps({"paths": paths}).encode(),
     headers={"Content-Type": "application/json"},
     method="POST",
 )
 with urllib.request.urlopen(req, timeout=10) as resp:
     print(resp.read().decode())
-from ghost_run.state import get_state
 real = get_state().real_root
 for rel in paths:
     print(f"real {rel} exists={ (real / rel).exists() }")
@@ -207,11 +285,11 @@ assert not (real / "CLEANUP_NOTES.md").exists()
 print("apply-3 OK: deletions on real, notes still ghost-only")
 PY
 
-echo "Beat 7: discard remaining" | tee -a "$LOG"
+echo "Beat 8: discard remaining" | tee -a "$LOG"
 python - <<'PY' | tee -a "$LOG"
-import urllib.request
+import os, urllib.request
 req = urllib.request.Request(
-    "http://127.0.0.1:8765/api/discard",
+    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/discard",
     data=b"{}",
     headers={"Content-Type": "application/json"},
     method="POST",
@@ -223,7 +301,7 @@ st = get_state()
 print("after discard enabled=", st.enabled, "ghost=", st.ghost_root)
 PY
 
-echo "Beat 8: CoW / hardlink timing on ~5k-file tree" | tee -a "$LOG"
+echo "Beat 9: CoW / hardlink timing on ~5k-file tree" | tee -a "$LOG"
 export TIMING_JSON
 python - <<'PY' | tee -a "$LOG"
 import json, tempfile, shutil, os
@@ -268,6 +346,7 @@ PY
 echo "" | tee -a "$LOG"
 echo "DEMO COMPLETE" | tee -a "$LOG"
 echo "  log: $LOG"
-echo "  pane: $PANE_PNG"
+echo "  pane: $PANE_PNG (recaptured after Verify Pass)"
+echo "  verify: Pass, then Fail with index.html restored; Apply ran after Fail"
 echo "  timing: $TIMING_JSON"
 echo "  work (left for inspection): $WORK"

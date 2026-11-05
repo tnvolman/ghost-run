@@ -26,8 +26,8 @@ def register(ctx) -> None:
     ctx.register_command(
         "ghost",
         slash_ghost,
-        description="Ghost Run dry-run mode: on|off|status|diff|verify|apply|discard",
-        args_hint="on|off|status|diff|verify|apply [paths...]|discard",
+        description="Ghost Run dry-run mode: on|off|status|diff|verify|apply|discard|ui",
+        args_hint="on|off|status|diff|verify|apply [paths...]|discard|ui",
     )
     ctx.register_cli_command(
         "ghost",

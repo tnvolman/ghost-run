@@ -296,6 +296,28 @@ def test_ui_verify_is_advisory(project, monkeypatch):
         httpd.server_close()
 
 
+def test_demo_script_verify_beat_is_advisory_and_before_apply():
+    """run_demo.sh runs the CLI verify path, records Pass then Fail, then Apply."""
+    script = (ROOT / "demo" / "run_demo.sh").read_text(encoding="utf-8")
+    assert 'slash_ghost("verify")' in script
+    assert "python3 scripts/ghost_verify.py" in script
+    assert "VERIFY_PASS" in script
+    assert "VERIFY_FAIL" in script
+    assert "index.html" in script
+    pass_at = script.index("VERIFY_PASS")
+    fail_at = script.index("VERIFY_FAIL")
+    apply_at = script.index("/api/apply")
+    assert pass_at < fail_at < apply_at
+    # Fail does not exit the runner before Apply.
+    assert "Apply still allowed after Fail" in script
+    assert "apply after Verify Fail" in script
+    # Screenshot/log stay the existing artifacts (no node_modules install).
+    assert "PANE_PNG" in script
+    assert "demo-run.log" in script
+    assert "npm install" not in script
+    assert "node_modules" not in script.split("Beat 6")[1].split("Beat 7")[0]
+
+
 def test_desktop_pane_has_advisory_verify():
     js = (ROOT / "desktop" / "plugin.js").read_text(encoding="utf-8")
     assert "Verify" in js

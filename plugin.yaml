@@ -10,7 +10,7 @@ description: >
 author: "Michael McClanahan (@tnvolman)"
 kind: standalone
 license: MIT
-homepage: ""
+homepage: "https://github.com/tnvolman/ghost-run"
 tags:
   - safety
   - dry-run
