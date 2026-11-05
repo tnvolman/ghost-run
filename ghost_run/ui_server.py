@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 from .apply import apply_paths, discard_session
 from .diff import DiffReport, compute_diff
+from .risk import ai_enabled, annotate, blocked_flags, model_notes, summarize_counts
 from .state import get_state
 
 DEFAULT_HOST = "127.0.0.1"
@@ -76,9 +77,18 @@ def current_diff_payload() -> Dict[str, Any]:
         changes.append({"path": ch.path, "kind": "modified", "unified_diff": ch.unified_diff})
     for ch in report.deleted:
         changes.append({"path": ch.path, "kind": "deleted", "unified_diff": ch.unified_diff})
+    annotate(changes, state.real_root, state.ghost_root)
+    ai = model_notes(changes) if ai_enabled() else {"status": "off", "notes": {}, "summary": ""}
+    for c in changes:
+        note = ai["notes"].get(c["path"])
+        if note:
+            c["risk"]["ai_note"] = note
     return {
         "ok": True,
         "enabled": bool(state.enabled),
+        "risk_counts": summarize_counts(changes),
+        "blocked": blocked_flags(),
+        "ai": {"status": ai["status"], "summary": ai.get("summary", "")},
         "real_root": data["real_root"],
         "ghost_root": data["ghost_root"],
         "counts": data["counts"],
@@ -126,7 +136,7 @@ PANE_HTML = r"""<!DOCTYPE html>
   .list { border-right: 1px solid var(--border); }
   .counts { color: var(--muted); font-size: .85rem; margin-bottom: 10px; }
   .row {
-    display: grid; grid-template-columns: 22px 64px 1fr; gap: 8px; align-items: center;
+    display: grid; grid-template-columns: 22px 46px 64px 1fr; gap: 8px; align-items: center;
     padding: 8px 6px; border-radius: 8px; cursor: pointer;
   }
   .row:hover, .row.active { background: #1c2230; }
@@ -138,6 +148,15 @@ PANE_HTML = r"""<!DOCTYPE html>
   .badge.added { background: #143526; color: var(--add); }
   .badge.modified { background: #3a2a10; color: var(--mod); }
   .badge.deleted { background: #3a1520; color: var(--del); }
+  .risk { font-size: .66rem; font-weight: 800; text-transform: uppercase; padding: 2px 6px; border-radius: 6px; text-align: center; }
+  .risk.high { background: #5a1020; color: #ff8fa8; box-shadow: 0 0 0 1px #f31260 inset; }
+  .risk.med { background: #3a2a10; color: #f5c46a; }
+  .risk.low { background: #143526; color: #7be8b0; }
+  .reason { grid-column: 3 / -1; color: var(--muted); font-size: .76rem; margin-top: -4px; }
+  .reason .ai { color: #b9c6ff; display: block; }
+  .riskbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; font-size: .8rem; flex-wrap: wrap; }
+  .blocked { background: #2a1018; border: 1px solid #5a2030; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; font-size: .78rem; color: #ffb4c4; }
+  .aisum { color: #b9c6ff; font-size: .78rem; margin-bottom: 8px; }
   .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; word-break: break-all; }
   .path.deleted { color: var(--del); text-decoration: line-through; }
   .empty { color: var(--muted); padding: 24px 8px; }
@@ -173,8 +192,11 @@ PANE_HTML = r"""<!DOCTYPE html>
   <main>
     <section class="list">
       <div class="counts" id="counts"></div>
+      <div class="riskbar" id="riskbar"></div>
+      <div id="blocked"></div>
+      <div class="aisum" id="aisum"></div>
       <div class="select-bar">
-        <a id="selAll">Select all</a> · <a id="selNone">Select none</a>
+        <a id="selAll">Select all</a> · <a id="selNone">Select none</a> · <a id="selLow">Select only low-risk</a>
       </div>
       <div id="rows"></div>
     </section>
@@ -194,6 +216,8 @@ function toast(msg) {
   clearTimeout(toast._t);
   toast._t = setTimeout(() => el.classList.remove('show'), 3200);
 }
+
+function esc(t) { return String(t || '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
 function colorize(diff) {
   if (!diff) return '(no unified diff)';
@@ -218,12 +242,16 @@ function render() {
     const div = document.createElement('div');
     div.className = 'row' + (state.active === ch.path ? ' active' : '');
     div.dataset.path = ch.path;
+    const rk = ch.risk || {level: 'low', reason: ''};
     const checked = state.selected.has(ch.path) ? 'checked' : '';
     const pathClass = ch.kind === 'deleted' ? 'path deleted' : 'path';
     div.innerHTML =
       '<input type="checkbox" ' + checked + ' aria-label="select ' + ch.path + '"/>' +
+      '<span class="risk ' + rk.level + '" title="risk">' + rk.level + '</span>' +
       '<span class="badge ' + ch.kind + '">' + ch.kind + '</span>' +
-      '<span class="' + pathClass + '">' + ch.path.replace(/</g,'&lt;') + '</span>';
+      '<span class="' + pathClass + '">' + esc(ch.path) + '</span>' +
+      '<span class="reason">' + esc(rk.reason) +
+        (rk.ai_note ? '<span class="ai">AI: ' + esc(rk.ai_note) + '</span>' : '') + '</span>';
     const cb = div.querySelector('input');
     cb.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -255,6 +283,20 @@ async function loadDiff() {
     '+' + data.counts.added + ' added · ~' + data.counts.modified +
     ' modified · −' + data.counts.deleted + ' deleted';
   state.changes = data.changes || [];
+  const rc = data.risk_counts || {high:0, med:0, low:0};
+  document.getElementById('riskbar').innerHTML =
+    '<span class="risk high">' + rc.high + ' high</span>' +
+    '<span class="risk med">' + rc.med + ' med</span>' +
+    '<span class="risk low">' + rc.low + ' low</span>' +
+    '<span style="color:var(--muted)">sorted by risk · you decide what applies</span>';
+  const bl = data.blocked || [];
+  document.getElementById('blocked').innerHTML = bl.length
+    ? '<div class="blocked"><b>' + bl.length + ' blocked attempt(s)</b><br/>' + bl.slice(-5).map(b => '• ' + esc(b.reason)).join('<br/>') + '</div>'
+    : '';
+  const ai = data.ai || {};
+  document.getElementById('aisum').textContent =
+    ai.status === 'ok' && ai.summary ? 'AI summary: ' + ai.summary
+    : ai.status === 'fallback' ? 'AI summary unavailable; showing heuristic flags.' : '';
   // Keep prior selection when paths still exist; default-select all on first load.
   if (state.selected.size === 0) {
     state.changes.forEach(c => state.selected.add(c.path));
@@ -274,6 +316,11 @@ async function loadDiff() {
 document.getElementById('refreshBtn').onclick = () => loadDiff().catch(e => toast(String(e)));
 document.getElementById('selAll').onclick = () => {
   state.changes.forEach(c => state.selected.add(c.path)); render();
+};
+document.getElementById('selLow').onclick = () => {
+  state.selected.clear();
+  state.changes.forEach(c => { if ((c.risk || {}).level === 'low') state.selected.add(c.path); });
+  render();
 };
 document.getElementById('selNone').onclick = () => { state.selected.clear(); render(); };
 

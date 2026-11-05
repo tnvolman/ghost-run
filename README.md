@@ -70,6 +70,24 @@ hermes ghost ui --open
 
 `hermes ghost diff` still writes a static `ghost-run-diff.html` snapshot.
 
+## AI risk flags
+
+Every pending ghost change gets a risk badge (**high**, **med**, or **low**) and a one-line reason in plain English. The list is sorted with the riskiest changes first, in both the Desktop pane and `hermes ghost ui`.
+
+The heuristics are deterministic and always on (`ghost_run/risk.py`):
+
+| Level | Trigger |
+|---|---|
+| high | secrets files (`.env`, `*.pem`, keys, credentials) or added lines that look like keys or tokens; DB migrations / `.sql`; mass deletes (5 or more); permission changes to world-writable or newly executable |
+| med | single deletes; lockfiles and dependency manifests; CI, build, or deploy config; other mode changes; large diffs (300+ lines) |
+| low | everything else (new files, small edits) |
+
+Blocked agent attempts (network tools, network shell commands, workdirs outside the folder) are logged to `blocked.jsonl` next to the session file and listed as high-risk flags.
+
+**Select only low-risk** checks only the changes the heuristics rated low. Nothing applies until you press **Apply selected**.
+
+**Optional model notes:** set `GHOST_RUN_AI=1` together with `HERMES_MODEL_API_KEY` (or `OPENROUTER_API_KEY`). `hermes ghost ui` then asks `openrouter/free` (override with `GHOST_RUN_MODEL`) for one sentence per file plus an overall summary, and caches the answer by diff. The model only adds advisory text. It never changes a risk level, selects a file, or applies anything. On a timeout (8 s), an HTTP error, or bad JSON, the pane quietly falls back to the heuristic flags. The key is sent only in the Authorization header and is never logged or printed.
+
 ## Speed
 
 Ghost copies prefer filesystem CoW / hardlinks when possible:

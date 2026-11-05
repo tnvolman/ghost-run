@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from .network import is_network_tool, network_command_reason
 from .paths import is_within, resolve_under
+from .risk import record_block
 from .state import get_state
 
 
@@ -21,6 +22,13 @@ def on_pre_tool_call(
     state = get_state()
     if not state.enabled:
         return None
+    result = _decide(state, tool_name, args)
+    if result and result.get("action") == "block":
+        record_block(tool_name, result.get("message", ""))
+    return result
+
+
+def _decide(state, tool_name: str, args: Any) -> Optional[Dict[str, str]]:
 
     if state.pending_block:
         msg = state.pending_block

@@ -125,6 +125,14 @@ def compute_diff(
             except OSError:
                 same = False
             if same:
+                try:
+                    ma = real_files[rel].stat().st_mode & 0o7777
+                    mb = ghost_files[rel].stat().st_mode & 0o7777
+                except OSError:
+                    ma = mb = 0
+                if ma != mb:
+                    ud = f"--- a/{rel}\n+++ b/{rel}\n@@ mode {oct(ma)} -> {oct(mb)} @@\n"
+                    report.modified.append(FileChange(path=rel, kind="modified", unified_diff=ud))
                 continue
             r_lines = _read_lines(real_files[rel])
             g_lines = _read_lines(ghost_files[rel])

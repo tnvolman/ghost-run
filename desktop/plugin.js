@@ -27,12 +27,19 @@ const CSS = `
 .ghost-body{display:grid;grid-template-columns:minmax(200px,1fr) minmax(220px,1.3fr);min-height:0;flex:1}
 .ghost-list,.ghost-diff{overflow:auto;min-height:0;padding:8px 10px}
 .ghost-list{border-right:1px solid var(--ui-border, #2a2e37)}
-.ghost-row{display:grid;grid-template-columns:18px 62px 1fr;gap:6px;align-items:center;padding:6px 4px;border-radius:6px;cursor:pointer}
+.ghost-row{display:grid;grid-template-columns:18px 40px 62px 1fr;gap:6px;align-items:center;padding:6px 4px;border-radius:6px;cursor:pointer}
 .ghost-row:hover,.ghost-row[data-active=true]{background:var(--chrome-action-hover, #1c2230)}
 .ghost-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 6px;border-radius:999px;text-align:center;width:fit-content}
 .ghost-badge[data-kind=added]{background:#143526;color:#3dd68c}
 .ghost-badge[data-kind=modified]{background:#3a2a10;color:#f5a524}
 .ghost-badge[data-kind=deleted]{background:#3a1520;color:#f31260}
+.ghost-risk{font-size:9px;font-weight:800;text-transform:uppercase;padding:2px 5px;border-radius:5px;text-align:center}
+.ghost-risk[data-level=high]{background:#5a1020;color:#ff8fa8;box-shadow:0 0 0 1px #f31260 inset}
+.ghost-risk[data-level=med]{background:#3a2a10;color:#f5c46a}
+.ghost-risk[data-level=low]{background:#143526;color:#7be8b0}
+.ghost-reason{grid-column:3 / -1;color:var(--ui-text-tertiary,#9aa3b2);font-size:10.5px;margin-top:-3px}
+.ghost-ai{display:block;color:#b9c6ff}
+.ghost-blocked{background:#2a1018;border:1px solid #5a2030;border-radius:6px;padding:6px 8px;margin-bottom:6px;color:#ffb4c4;font-size:11px}
 .ghost-path{font-family:var(--font-mono, ui-monospace, monospace);font-size:11px;word-break:break-all}
 .ghost-path[data-kind=deleted]{color:#f31260;text-decoration:line-through}
 .ghost-diff pre{margin:0;white-space:pre-wrap;font-family:var(--font-mono, ui-monospace, monospace);font-size:11px;line-height:1.4;background:#12151c;border:1px solid var(--ui-border,#2a2e37);border-radius:8px;padding:10px}
@@ -63,6 +70,11 @@ function GhostPane() {
   const [status, setStatus] = useState('')
 
   const changes = payload && payload.ok ? (payload.changes || []) : []
+  const riskOf = (c) => c.risk || { level: 'low', reason: '' }
+  const selectLowRisk = () => {
+    // Heuristic level only; the model never selects or applies.
+    setSelected(new Set(changes.filter((c) => riskOf(c).level === 'low').map((c) => c.path)))
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -175,6 +187,13 @@ function GhostPane() {
           }),
           _jsx(Button, {
             size: 'sm',
+            variant: 'ghost',
+            disabled: busy || !changes.length,
+            onClick: selectLowRisk,
+            children: 'Select only low-risk'
+          }),
+          _jsx(Button, {
+            size: 'sm',
             disabled: busy || !changes.length,
             onClick: applySelected,
             children: 'Apply selected'
@@ -240,6 +259,24 @@ function GhostPane() {
                           ' deleted'
                         : ''
                   }),
+                  payload && payload.risk_counts
+                    ? _jsx('div', {
+                        className: 'ghost-counts',
+                        children:
+                          payload.risk_counts.high + ' high · ' + payload.risk_counts.med +
+                          ' med · ' + payload.risk_counts.low + ' low (sorted by risk)'
+                      })
+                    : null,
+                  payload && payload.blocked && payload.blocked.length
+                    ? _jsx('div', {
+                        className: 'ghost-blocked',
+                        children: payload.blocked.length + ' blocked attempt(s): ' +
+                          payload.blocked.slice(-3).map((b) => b.reason).join(' | ')
+                      })
+                    : null,
+                  payload && payload.ai && payload.ai.status === 'ok' && payload.ai.summary
+                    ? _jsx('div', { className: 'ghost-counts', children: 'AI: ' + payload.ai.summary })
+                    : null,
                   changes.length === 0
                     ? _jsx('div', {
                         className: 'ghost-empty',
@@ -264,6 +301,11 @@ function GhostPane() {
                                 'aria-label': 'select ' + ch.path
                               }),
                               _jsx('span', {
+                                className: 'ghost-risk',
+                                'data-level': riskOf(ch).level,
+                                children: riskOf(ch).level
+                              }),
+                              _jsx('span', {
                                 className: 'ghost-badge',
                                 'data-kind': ch.kind,
                                 children: ch.kind
@@ -272,6 +314,15 @@ function GhostPane() {
                                 className: 'ghost-path',
                                 'data-kind': ch.kind,
                                 children: ch.path
+                              }),
+                              _jsxs('span', {
+                                className: 'ghost-reason',
+                                children: [
+                                  riskOf(ch).reason,
+                                  riskOf(ch).ai_note
+                                    ? _jsx('span', { className: 'ghost-ai', children: 'AI: ' + riskOf(ch).ai_note })
+                                    : null
+                                ]
                               })
                             ]
                           },

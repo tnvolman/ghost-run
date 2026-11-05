@@ -41,6 +41,9 @@ def turn_on(real_root: Optional[Path] = None) -> str:
     state.ghost_root = ghost
     state.pending_block = None
     state.flags.clear()
+    from .risk import clear_blocks
+
+    clear_blocks()
     state.save()
     return (
         f"Ghost Mode: ON\n"
