@@ -1,0 +1,27 @@
+Ghost Run diff — real: /workspace/ghost-run-demo-live
+                 ghost: /tmp/ghost-run-jpkt3_35-ghost-run-demo-live
+  +1 added  ~1 modified  -1 deleted
+
+  + brand_new.txt
+  ~ notes.txt
+  - src/unused_tmp.py
+
+--- a/brand_new.txt
++++ b/brand_new.txt
+@@ -0,0 +1 @@
++hello from ghost
+
+--- a/notes.txt
++++ b/notes.txt
+@@ -1 +1 @@
+-keep me
++cleaned by ghost-run demo
+
+--- a/src/unused_tmp.py
++++ b/src/unused_tmp.py
+@@ -1,2 +0,0 @@
+-# ephemeral helper — demo asks the agent to delete unused files
+-TEMP = True
+
+HTML report: /tmp/ghost-run-jpkt3_35-ghost-run-demo-live/ghost-run-diff.html
+

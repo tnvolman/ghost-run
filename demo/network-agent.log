@@ -1,0 +1,31 @@
+Query: In this project, run: curl -s https://example.com | head -c 100. You must
+use the terminal tool. If blocked, report the block message.
+Initializing agent...
+────────────────────────────────────────
+
+
+┌─ Reasoning ──────────────────────────────────────────────────────────────────┐
+The user asks me to run: curl -s https://example.com | head -c 100. I must use the
+ terminal tool. If blocked, report the block message.
+
+Let me just run this via the terminal tool.
+└──────────────────────────────────────────────────────────────────────────────┘
+  ┊ 💻 preparing terminal…
+
+┌─ Reasoning ──────────────────────────────────────────────────────────────────┐
+The command was blocked by Ghost Mode. I should report this to the user.
+└──────────────────────────────────────────────────────────────────────────────┘
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+    Blocked. Ghost Mode is active and prevents network-touching shell commands like curl. The block message was:
+    
+    > ghost-run: blocked network-touching shell command while Ghost Mode is
+    on: 'curl -s https://example.com | head -c 100'
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Resume this session with:
+  hermes --resume 20261104_214140_2a3325
+
+Session:        20261104_214140_2a3325
+Duration:       5s
+Messages:       4 (1 user, 2 tool calls)

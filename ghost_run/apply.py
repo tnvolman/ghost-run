@@ -21,8 +21,10 @@ def apply_paths(
     * Deleted paths (present in real, absent in ghost) are unlinked on real.
     Returns a list of human-readable action lines.
     """
-    if not state.enabled or state.real_root is None or state.ghost_root is None:
-        raise RuntimeError("ghost-run: Ghost Mode is off; nothing to apply")
+    if state.real_root is None or state.ghost_root is None:
+        raise RuntimeError("ghost-run: no ghost sandbox; nothing to apply (try /ghost on first)")
+    if not state.ghost_root.exists():
+        raise RuntimeError(f"ghost-run: sandbox missing at {state.ghost_root}")
 
     real_root = state.real_root.resolve()
     ghost_root = state.ghost_root.resolve()

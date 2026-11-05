@@ -40,6 +40,7 @@ def turn_on(real_root: Optional[Path] = None) -> str:
     state.ghost_root = ghost
     state.pending_block = None
     state.flags.clear()
+    state.save()
     return (
         f"Ghost Mode: ON\n"
         f"  real:  {root}\n"
@@ -60,6 +61,7 @@ def turn_off(*, discard: bool = True) -> str:
     else:
         # Keep sandbox on disk for later apply, but stop remapping.
         state.enabled = False
+        state.save()
         msg = (
             f"Ghost Mode: OFF (sandbox kept at {state.ghost_root}; "
             f"run hermes ghost apply|discard next)"

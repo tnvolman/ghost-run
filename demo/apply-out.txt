@@ -1,0 +1,4 @@
+Applied:
+  added → applied brand_new.txt
+  modified → applied notes.txt
+  deleted → removed src/unused_tmp.py

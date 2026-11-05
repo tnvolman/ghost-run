@@ -18,7 +18,10 @@ FIXTURE = Path(__file__).parent / "fixtures" / "demo_project"
 
 
 @pytest.fixture(autouse=True)
-def _clean_state():
+def _clean_state(tmp_path_factory, monkeypatch):
+    # Isolate persisted sessions so tests never touch ~/.hermes/ghost-run.
+    session = tmp_path_factory.mktemp("ghost-session") / "active.json"
+    monkeypatch.setenv("GHOST_RUN_SESSION_FILE", str(session))
     reset_state()
     yield
     reset_state()
