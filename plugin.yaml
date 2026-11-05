@@ -5,7 +5,10 @@ description: >
   and terminal tools are redirected into a throwaway copy of the working folder;
   network-touching tools and commands are blocked. Review the diff, then apply
   selected paths or discard. Optional thin Verify runs one configured test in
-  the ghost copy (advisory; Apply stays human). Slash: /ghost on|off|status.
+  the ghost copy only after you approve that project (advisory; Apply stays human).
+  Opt-in outbound: set GHOST_RUN_AI=1 to send diffs to OpenRouter for advisory
+  notes. Off by default; nothing is uploaded otherwise.
+  Slash: /ghost on|off|status.
   CLI: hermes ghost diff|verify|apply|discard|ui.
 author: "Michael McClanahan (@tnvolman)"
 kind: standalone

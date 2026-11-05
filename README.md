@@ -2,6 +2,8 @@
 
 **Dry-run mode for [Hermes Agent](https://hermes-agent.nousresearch.com).** While Ghost Mode is on, file writes/edits/deletes and terminal tools are redirected into a throwaway copy of your working folder. Network-touching tools and shell commands are blocked. Review the diff, then apply only the paths you want — or discard everything. Your real disk stays untouched until you say so.
 
+**Opt-in outbound.** With `GHOST_RUN_AI` unset, Ghost Run does not send file contents anywhere. Set `GHOST_RUN_AI=1` (and an API key) and pending diffs are posted to OpenRouter for advisory notes. That upload is off unless you turn it on.
+
 > Local scaffold for the Nous Research Hermes plugin hackathon (entries due **Wed Nov 11, 2026, 5:00 PM America/New_York**). This repo is **local-only** until Michael says yes to publish.
 
 ## 90-second demo script
@@ -19,10 +21,10 @@ Automated (deterministic) runner:
 Manual beats:
 
 1. `cd` into `demo/fixture` (small web project with obvious unused files).
-2. `/ghost on` — Hermes CoW/hardlink-copies the tree into a temp sandbox (skips `.git`, `node_modules`, venvs, build dirs; configurable via `.ghost-runignore` / `GHOST_RUN_IGNORE`).
+2. `/ghost on` — Hermes copies the tree into a temp sandbox (copy-on-write reflink when the filesystem supports it, otherwise a real copy; never a hard link). Skips `.git`, `node_modules`, venvs, build dirs; configurable via `.ghost-runignore` / `GHOST_RUN_IGNORE`.
 3. Ask the agent: **"delete unused files"** (or have it `write_file` / `rm` via `terminal`).
-4. `hermes ghost ui` — interactive pane on localhost (checkboxes, badges, struck-through deletions, unified diff, **Verify**). Desktop `desktop/plugin.js` registers the same pane via `ctx.openWorkspace` / `area: 'panes'`.
-5. `hermes ghost verify` — or press **Verify**. The demo fixture’s `.ghost-run-test` runs `python3 scripts/ghost_verify.py` in the ghost copy (no `node_modules`). **Pass** / **Fail** is evidence only.
+4. `hermes ghost ui` — interactive pane on `127.0.0.1`. The command prints `http://127.0.0.1:<port>/?token=<random>`. Open that exact URL. The page checks `Host` is `127.0.0.1:<port>` or `localhost:<port>` and requires the token on every request. Desktop `desktop/plugin.js` registers the same pane via `ctx.openWorkspace` / `area: 'panes'` and must use that full URL, token included.
+5. `hermes ghost verify` — or press **Verify**. The first run for a project asks you to approve the command (Hermes approval prompt, or a yes/no in the terminal). The demo fixture’s `.ghost-run-test` runs `python3 scripts/ghost_verify.py` in the ghost copy (no `node_modules`). **Pass** / **Fail** is evidence only.
 6. Apply selected paths — **or** Discard. A red Verify result does not disable Apply. Real disk stays untouched until Apply.
 
 ## Install (dev)
@@ -62,14 +64,16 @@ Target built-in tools (Hermes 0.19+): `write_file`, `patch`, `read_file`, `searc
 
 - per-file checkboxes, added/modified badges, struck-through deletions
 - unified diff preview
-- **Verify** (advisory Pass/Fail) / **Apply selected** / **Discard** wired to `http://127.0.0.1:8765/api/*`
+- **Verify** (advisory Pass/Fail) / **Apply selected** / **Discard** wired to the loopback UI
 
 Because the Electron Desktop app may not run headless on the box, ship the same UX via:
 
 ```bash
-hermes ghost ui          # http://127.0.0.1:8765/
-hermes ghost ui --open
+hermes ghost ui          # prints http://127.0.0.1:<port>/?token=<random>
+hermes ghost ui --open   # opens that exact URL
 ```
+
+The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). Each request must send `Host: 127.0.0.1:<port>` or `Host: localhost:<port>` and the session token from the printed URL (`?token=` or the `X-Ghost-Run-Token` header). Responses do not send `Access-Control-Allow-Origin`. Paste the printed URL, token included, into the Desktop pane’s API base if you use that pane.
 
 `hermes ghost diff` still writes a static `ghost-run-diff.html` snapshot.
 
@@ -89,7 +93,7 @@ Blocked agent attempts (network tools, network shell commands, workdirs outside 
 
 **Select only low-risk** checks only the changes the heuristics rated low. Nothing applies until you press **Apply selected**.
 
-**Optional model notes:** set `GHOST_RUN_AI=1` together with `HERMES_MODEL_API_KEY` (or `OPENROUTER_API_KEY`). `hermes ghost ui` then asks `openrouter/free` (override with `GHOST_RUN_MODEL`) for one sentence per file plus an overall summary, and caches the answer by diff. The model only adds advisory text. It never changes a risk level, selects a file, or applies anything. On a timeout (8 s), an HTTP error, or bad JSON, the pane quietly falls back to the heuristic flags. The key is sent only in the Authorization header and is never logged or printed.
+**Optional model notes (opt-in outbound):** set `GHOST_RUN_AI=1` together with `HERMES_MODEL_API_KEY` (or `OPENROUTER_API_KEY`). This is the only Ghost Run path that leaves the machine: `ghost_run/risk.py` POSTs the pending diffs to OpenRouter (`https://openrouter.ai/api/v1/chat/completions`, model `openrouter/free`, override with `GHOST_RUN_MODEL`) for one sentence per file plus an overall summary, and caches the answer by diff. Leave `GHOST_RUN_AI` unset and nothing is uploaded. The model only adds advisory text. It never changes a risk level, selects a file, or applies anything. On a timeout (8 s), an HTTP error, or bad JSON, the pane quietly falls back to the heuristic flags. The key is sent only in the Authorization header and is never logged or printed.
 
 ## Verify (advisory)
 
@@ -102,6 +106,10 @@ Command resolution, in order:
 3. Otherwise Verify reports `no test command configured`.
 
 The command string is read from the environment or the real tree, then executed with **cwd = the ghost sandbox** (90s timeout, stdout/stderr capped at 12 KiB). An agent edit of `.ghost-run-test` inside the ghost copy does not change which command runs. The process itself sees ghost files, so a check script in the sandbox is what actually runs. There is no auto-discovery of pytest or npm, and Ghost Run does not install dependencies for you.
+
+**Approval, once per project and command.** Verify does not run a repo-chosen command until you approve that exact command for that project. The ask goes through Hermes' approval prompt when Hermes is installed (`once` runs this time, `session` remembers for this process, `always` is saved). Otherwise a terminal yes/no is used when stdin is a TTY; a yes is saved. Non-interactive runs with no saved approval fail closed and do not start the command. Saved approvals live in `verify-allow.json` next to the session file (`~/.hermes/ghost-run/` unless `GHOST_RUN_SESSION_FILE` / `HERMES_HOME` says otherwise), outside the project, so a repo cannot approve itself. A changed command asks again.
+
+The child process does not inherit provider API keys or other secrets. It receives a short allowlist (PATH, HOME, USER, locale, temp, and the usual Python/Node interpreter variables). Names that look like keys, tokens, or passwords are removed. Simple commands run without a shell; a command that uses pipes or redirects still uses a shell, and only after the same approval.
 
 ```bash
 cd demo/fixture
@@ -118,11 +126,15 @@ The same control is in the Desktop pane and `hermes ghost ui` (**Verify** button
 
 ## Speed
 
-Ghost copies prefer filesystem CoW / hardlinks when possible:
+Ghost copies are independent files. A hard link is the real file, so Ghost Mode will not create one and will not start if a copy comes out hard-linked.
 
-1. `cp --reflink=auto` → 2. `cp -a --link` → 3. per-file `os.link` → 4. filtered `copy2`
+1. `cp --reflink=auto` (copy-on-write clone, new inode) → 2. filtered `copy2`
 
-Override with `GHOST_RUN_COPY_STRATEGY=reflink|hardlink|hardlink-file|copy`. Ignore patterns: built-in (`.git`, `node_modules`, `.venv`, `dist`, `build`, …) plus `.ghost-runignore` and `GHOST_RUN_IGNORE=dir1,dir2`. See `demo/copy-timing.json` after `./demo/run_demo.sh`.
+`GHOST_RUN_COPY_STRATEGY=hardlink` and `hardlink-file` are refused. `reflink`, `copy`, and the default `auto` are allowed. Ignore patterns: built-in (`.git`, `node_modules`, `.venv`, `dist`, `build`, …) plus `.ghost-runignore` and `GHOST_RUN_IGNORE=dir1,dir2`. See `demo/copy-timing.json` after `./demo/run_demo.sh`.
+
+## Tools that bypass the copy
+
+`execute_code`, `send_message`, `delegate_task`, and `cronjob` are blocked while Ghost Mode is on. They are not remapped into the ghost copy; blocking them is the dry-run boundary. Each concurrent tool call keeps its own pending block slot (`tool_call_id`, or the calling thread when Hermes does not pass one), so one call cannot clear another’s block.
 
 ## Tests
 

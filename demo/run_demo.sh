@@ -180,18 +180,27 @@ python -m ghost_run.ui_server --host 127.0.0.1 --port "$UI_PORT" >"$UI_LOG" 2>&1
 UI_PID=$!
 echo "$UI_PID" > "$DEMO_DIR/.ui.pid"
 echo "$UI_PORT" > "$DEMO_DIR/.ui.port"
-for i in $(seq 1 20); do
-  if curl -fsS "http://127.0.0.1:$UI_PORT/api/health" >/dev/null 2>&1; then
-    echo "UI up on http://127.0.0.1:$UI_PORT/ (pid $UI_PID)" | tee -a "$LOG"
+UI_TOKEN=""
+for i in $(seq 1 40); do
+  if [[ -s "$UI_LOG" ]]; then
+    UI_TOKEN=$(sed -n 's/.*[?&]token=\([^[:space:]]*\).*/\1/p' "$UI_LOG" | head -1)
+  fi
+  if [[ -n "$UI_TOKEN" ]] && curl -fsS "http://127.0.0.1:$UI_PORT/api/health?token=${UI_TOKEN}" >/dev/null 2>&1; then
+    echo "UI up on http://127.0.0.1:$UI_PORT/ (token redacted, pid $UI_PID)" | tee -a "$LOG"
     break
   fi
   sleep 0.25
 done
-curl -fsS "http://127.0.0.1:$UI_PORT/api/health" | tee -a "$LOG"
+if [[ -z "${UI_TOKEN}" ]]; then
+  echo "ERROR: UI did not print a session token" | tee -a "$LOG" >&2
+  exit 1
+fi
+export UI_TOKEN
+curl -fsS "http://127.0.0.1:$UI_PORT/api/health?token=${UI_TOKEN}" | tee -a "$LOG"
 echo | tee -a "$LOG"
 
 export PANE_PNG
-export PANE_URL="http://127.0.0.1:$UI_PORT/"
+export PANE_URL="http://127.0.0.1:$UI_PORT/?token=${UI_TOKEN}"
 capture_pane | tee -a "$LOG"
 
 # README manual beat 5. Same path as `/ghost verify` / `hermes ghost verify`:
@@ -204,7 +213,11 @@ import os
 os.environ.pop("GHOST_RUN_TEST", None)
 from ghost_run.commands import slash_ghost
 from ghost_run.state import get_state
+from ghost_run.verify import remember_approval
 
+# Owner approval for this demo's known fixture command. The runner is
+# non-interactive, so it records the allowlist instead of prompting.
+remember_approval(get_state().real_root, "python3 scripts/ghost_verify.py")
 text = slash_ghost("verify")
 print(text, end="" if text.endswith("\n") else "\n")
 passed = get_state().last_verify or {}
@@ -216,7 +229,7 @@ assert "fixture healthy" in (passed.get("log") or "")
 print("VERIFY_PASS")
 PY
 echo "GET /api/verify after Pass" | tee -a "$LOG"
-curl -fsS "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
+curl -fsS "http://127.0.0.1:$UI_PORT/api/verify?token=${UI_TOKEN}" | tee -a "$LOG"
 echo | tee -a "$LOG"
 echo "recapture pane.png with Verify Pass banner" | tee -a "$LOG"
 export PANE_WAIT_SELECTOR="#verifyBanner.pass"
@@ -254,7 +267,7 @@ assert get_state().last_verify["status"] == "fail"
 print("restored ghost index.html; Apply still allowed after Fail")
 PY
 echo "GET /api/verify after Fail" | tee -a "$LOG"
-curl -fsS "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
+curl -fsS "http://127.0.0.1:$UI_PORT/api/verify?token=${UI_TOKEN}" | tee -a "$LOG"
 echo | tee -a "$LOG"
 
 echo "Beat 7: apply selected (3 deletions) via UI API after Verify Fail" | tee -a "$LOG"
@@ -267,7 +280,7 @@ assert verify.get("advisory") is True
 print("apply after Verify Fail (advisory; Apply stays available)")
 paths = ["src/unused_legacy.js", "src/old_helper.js", "tmp/cache.tmp"]
 req = urllib.request.Request(
-    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/apply",
+    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/apply?token={os.environ['UI_TOKEN']}",
     data=json.dumps({"paths": paths}).encode(),
     headers={"Content-Type": "application/json"},
     method="POST",
@@ -289,7 +302,7 @@ echo "Beat 8: discard remaining" | tee -a "$LOG"
 python - <<'PY' | tee -a "$LOG"
 import os, urllib.request
 req = urllib.request.Request(
-    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/discard",
+    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/discard?token={os.environ['UI_TOKEN']}",
     data=b"{}",
     headers={"Content-Type": "application/json"},
     method="POST",
@@ -301,7 +314,7 @@ st = get_state()
 print("after discard enabled=", st.enabled, "ghost=", st.ghost_root)
 PY
 
-echo "Beat 9: CoW / hardlink timing on ~5k-file tree" | tee -a "$LOG"
+echo "Beat 9: copy / reflink timing on ~5k-file tree (hard links refused)" | tee -a "$LOG"
 export TIMING_JSON
 python - <<'PY' | tee -a "$LOG"
 import json, tempfile, shutil, os
@@ -324,7 +337,7 @@ for j in range(200):
 (tree / ".venv" / "lib" / "x.py").write_text("# venv\n")
 
 results = {}
-for strat in ("auto", "hardlink", "hardlink-file", "copy", "reflink"):
+for strat in ("auto", "copy", "reflink", "hardlink", "hardlink-file"):
     try:
         ghost, dt, used = timed_create(tree, strategy=strat)
         count = sum(
@@ -334,7 +347,7 @@ for strat in ("auto", "hardlink", "hardlink-file", "copy", "reflink"):
         results[strat] = {"seconds": round(dt, 4), "used": used, "files_in_ghost": count}
         discard_ghost_copy(ghost)
     except Exception as e:
-        results[strat] = {"error": repr(e)}
+        results[strat] = {"error": repr(e), "refused": "hard link" in str(e).lower()}
 
 out = Path(os.environ["TIMING_JSON"])
 out.write_text(json.dumps({"tree_files_approx": n, "results": results}, indent=2) + "\n")

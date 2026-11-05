@@ -6,9 +6,9 @@ import copy
 import re
 from typing import Any, Dict, Optional, Set
 
-from .network import is_network_tool, network_command_reason
+from .network import bypass_tool_reason, is_network_tool, network_command_reason
 from .paths import remap_to_ghost
-from .state import get_state
+from .state import get_state, set_pending_block
 
 # Tools whose `path` argument is remapped into the ghost copy.
 PATH_TOOLS: Set[str] = {"write_file", "patch", "read_file", "search_files"}
@@ -33,15 +33,25 @@ def _remap_command_paths(command: str, real_root, ghost_root) -> str:
     return _ABS_PATH_IN_CMD.sub(repl, out)
 
 
+def _tool_call_id(kwargs: Dict[str, Any]) -> str:
+    raw = kwargs.get("tool_call_id") or ""
+    return raw if isinstance(raw, str) else ""
+
+
+def _queue_block(message: str, tool_call_id: str) -> None:
+    """Record a block for this call only. The matching pre_tool_call pops it."""
+    set_pending_block(message, tool_call_id)
+
+
 def on_tool_request(
     tool_name: str = "",
     args: Optional[Dict[str, Any]] = None,
-    **_: Any,
+    **kwargs: Any,
 ) -> Optional[Dict[str, Any]]:
     """Rewrite tool args so file/terminal ops hit the ghost copy.
 
     Returns ``{"args": ..., "source": "ghost-run", "reason": "..."}`` or None.
-    Outside-root and network shell commands set ``state.pending_block`` for
+    Outside-root and network shell commands set a per-call pending slot for
     the ``pre_tool_call`` hook (middleware cannot block by itself).
     """
     state = get_state()
@@ -50,11 +60,19 @@ def on_tool_request(
     if not isinstance(args, dict):
         return None
 
+    call_id = _tool_call_id(kwargs)
+
     # Network tools: leave args alone; pre_tool_call will block.
     if is_network_tool(tool_name):
-        state.pending_block = (
-            f"ghost-run: blocked network tool {tool_name!r} while Ghost Mode is on"
+        _queue_block(
+            f"ghost-run: blocked network tool {tool_name!r} while Ghost Mode is on",
+            call_id,
         )
+        return None
+
+    bypass = bypass_tool_reason(tool_name)
+    if bypass:
+        _queue_block(bypass, call_id)
         return None
 
     new_args = copy.deepcopy(args)
@@ -67,7 +85,7 @@ def on_tool_request(
             raw = "."
         remapped, err = remap_to_ghost(raw, state.real_root, state.ghost_root)
         if err:
-            state.pending_block = err
+            _queue_block(err, call_id)
             return None
         new_args["path"] = remapped
         changed = True
@@ -77,7 +95,7 @@ def on_tool_request(
         if isinstance(command, str):
             net = network_command_reason(command)
             if net:
-                state.pending_block = net
+                _queue_block(net, call_id)
                 return None
             rewritten = _remap_command_paths(command, state.real_root, state.ghost_root)
             if rewritten != command:
@@ -89,7 +107,7 @@ def on_tool_request(
         if workdir:
             remapped, err = remap_to_ghost(str(workdir), state.real_root, state.ghost_root)
             if err:
-                state.pending_block = err
+                _queue_block(err, call_id)
                 return None
             new_args["workdir"] = remapped
         else:

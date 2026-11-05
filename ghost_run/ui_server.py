@@ -8,16 +8,22 @@ Serves the same UX the Desktop ``plugin.js`` pane targets:
   - Apply selected / Discard wired to apply/discard logic
 
 Start with ``hermes ghost ui`` (or ``python -m ghost_run.ui_server``).
+
+The server binds to ``127.0.0.1`` only. Every request must send
+``Host: 127.0.0.1:<port>`` or ``Host: localhost:<port>`` and the per-session
+token printed in the URL (``?token=`` or header ``X-Ghost-Run-Token``).
+There is no ``Access-Control-Allow-Origin`` header.
 """
 
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .apply import apply_paths, discard_session
 from .diff import DiffReport, compute_diff
@@ -27,6 +33,10 @@ from .verify import run_verify
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+# ``localhost`` is accepted as a Host header equivalent of 127.0.0.1.
+# The socket still binds to 127.0.0.1. Other hosts are rejected.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+_TOKEN_PLACEHOLDER = "__GHOST_RUN_TOKEN__"
 
 
 def report_to_dict(report: DiffReport) -> Dict[str, Any]:
@@ -226,6 +236,11 @@ PANE_HTML = r"""<!DOCTYPE html>
 <script>
 const state = { changes: [], selected: new Set(), active: null };
 let verifyInFlight = false;
+const GHOST_TOKEN = "__GHOST_RUN_TOKEN__";
+function api(path) {
+  const join = path.indexOf("?") === -1 ? "?" : "&";
+  return path + join + "token=" + encodeURIComponent(GHOST_TOKEN);
+}
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -317,7 +332,7 @@ function render() {
 }
 
 async function loadDiff() {
-  const res = await fetch('/api/diff');
+  const res = await fetch(api('/api/diff'));
   const data = await res.json();
   const meta = document.getElementById('meta');
   if (!data.ok) {
@@ -372,7 +387,7 @@ document.getElementById('verifyBtn').onclick = async () => {
   document.getElementById('verifyBanner').className = 'verify';
   document.getElementById('verifyBanner').textContent = 'Running verify…';
   try {
-    const res = await fetch('/api/verify', { method: 'POST' });
+    const res = await fetch(api('/api/verify'), { method: 'POST' });
     const data = await res.json();
     if (data.verify) renderVerify(data.verify);
     else {
@@ -399,7 +414,7 @@ document.getElementById('selNone').onclick = () => { state.selected.clear(); ren
 document.getElementById('applyBtn').onclick = async () => {
   const paths = [...state.selected];
   if (!paths.length) { toast('Select at least one path'); return; }
-  const res = await fetch('/api/apply', {
+  const res = await fetch(api('/api/apply'), {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ paths })
@@ -413,7 +428,7 @@ document.getElementById('applyBtn').onclick = async () => {
 
 document.getElementById('discardBtn').onclick = async () => {
   if (!confirm('Discard the entire ghost sandbox?')) return;
-  const res = await fetch('/api/discard', { method: 'POST' });
+  const res = await fetch(api('/api/discard'), { method: 'POST' });
   const data = await res.json();
   toast(data.message || (data.ok ? 'Discarded' : 'discard failed'));
   state.selected.clear();
@@ -435,28 +450,83 @@ class GhostUIHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:  # quieter
         pass
 
-    def _send(self, code: int, body: bytes, content_type: str) -> None:
+    def _send(self, code: int, body: bytes, content_type: str, *, close: bool = False) -> None:
+        if close:
+            self.close_connection = True
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if close:
+            self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(body)
+        if body:
+            self.wfile.write(body)
 
-    def _json(self, code: int, payload: Dict[str, Any]) -> None:
+    def _drain_body(self) -> None:
+        """Read a rejected request body so it is not parsed as the next request."""
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return
+        remaining = min(length, 1024 * 1024)
+        try:
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except Exception:
+            return
+
+    def _host_allowed(self) -> bool:
+        host = (self.headers.get("Host") or "").strip()
+        port = self.server.server_address[1]
+        return host in (f"127.0.0.1:{port}", f"localhost:{port}")
+
+    def _presented_token(self) -> str:
+        header = (self.headers.get("X-Ghost-Run-Token") or "").strip()
+        if header:
+            return header
+        values = parse_qs(urlparse(self.path).query).get("token") or []
+        return values[0] if values else ""
+
+    def _unauthorized(self) -> bool:
+        """Send 403/401 and return True when the request must not proceed."""
+        if not self._host_allowed():
+            self._drain_body()
+            self._json(403, {"ok": False, "error": "forbidden host"}, close=True)
+            return True
+        expected = getattr(self.server, "ghost_token", "") or ""
+        if not _token_match(self._presented_token(), expected):
+            self._drain_body()
+            self._json(401, {"ok": False, "error": "unauthorized"}, close=True)
+            return True
+        return False
+
+    def _json(self, code: int, payload: Dict[str, Any], *, close: bool = False) -> None:
         raw = json.dumps(payload, indent=2).encode("utf-8")
-        self._send(code, raw, "application/json; charset=utf-8")
+        self._send(code, raw, "application/json; charset=utf-8", close=close)
 
     def do_OPTIONS(self) -> None:  # noqa: N802
+        # No CORS headers. Same-origin calls that already carry the token get
+        # an empty 204; everyone else is rejected like any other request.
+        if self._unauthorized():
+            return
         self._send(204, b"", "text/plain")
 
     def do_GET(self) -> None:  # noqa: N802
+        if self._unauthorized():
+            return
         path = urlparse(self.path).path
         if path in ("/", "/index.html", "/pane"):
-            self._send(200, PANE_HTML.encode("utf-8"), "text/html; charset=utf-8")
+            token = getattr(self.server, "ghost_token", "")
+            page = PANE_HTML.replace(_TOKEN_PLACEHOLDER, token)
+            self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/api/diff":
             self._json(200, current_diff_payload())
@@ -471,6 +541,8 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         self._json(404, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if self._unauthorized():
+            return
         path = urlparse(self.path).path
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
@@ -527,6 +599,16 @@ def write_port_file(port: int) -> Path:
     return path
 
 
+def _token_match(presented: str, expected: str) -> bool:
+    if not presented or not expected:
+        return False
+    left = presented.encode("utf-8")
+    right = expected.encode("utf-8")
+    if len(left) != len(right):
+        return False
+    return secrets.compare_digest(left, right)
+
+
 def serve(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
@@ -534,18 +616,38 @@ def serve(
     open_browser: bool = False,
     block: bool = True,
 ) -> Tuple[ThreadingHTTPServer, int]:
-    """Bind and optionally block forever. Returns (server, bound_port)."""
-    httpd = ThreadingHTTPServer((host, port), GhostUIHandler)
+    """Bind and optionally block forever. Returns (server, bound_port).
+
+    The server object carries ``ghost_token``. The printed URL includes it.
+    ``host`` must be ``127.0.0.1`` or ``localhost`` (bound as 127.0.0.1).
+    """
+    if host not in LOOPBACK_HOSTS:
+        raise ValueError(
+            "ghost-run: the review UI only binds to 127.0.0.1 "
+            "(localhost is accepted and bound as 127.0.0.1). "
+            f"Refusing host {host!r}."
+        )
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), GhostUIHandler)
+    token = secrets.token_urlsafe(32)
+    httpd.ghost_token = token  # type: ignore[attr-defined]
     bound = httpd.server_address[1]
     write_port_file(bound)
-    url = f"http://{host}:{bound}/"
-    print(f"Ghost Run UI: {url}")
-    print("  GET  /           interactive Verify / Apply / Discard pane")
-    print("  GET  /api/diff   JSON change list (includes last verify)")
-    print("  GET  /api/verify last verify result")
-    print("  POST /api/verify run configured test in the ghost copy (advisory)")
-    print("  POST /api/apply  {\"paths\":[...]}  — empty/omit = all")
-    print("  POST /api/discard")
+    url = f"http://127.0.0.1:{bound}/?token={token}"
+    print(f"Ghost Run UI: {url}", flush=True)
+    print(
+        "  Host must be 127.0.0.1:<port> or localhost:<port>. Other hosts are rejected.",
+        flush=True,
+    )
+    print(
+        "  Every request needs this token (?token= or header X-Ghost-Run-Token).",
+        flush=True,
+    )
+    print("  GET  /           interactive Verify / Apply / Discard pane", flush=True)
+    print("  GET  /api/diff   JSON change list (includes last verify)", flush=True)
+    print("  GET  /api/verify last verify result", flush=True)
+    print("  POST /api/verify run configured test in the ghost copy (advisory)", flush=True)
+    print("  POST /api/apply  {\"paths\":[...]}  — empty/omit = all", flush=True)
+    print("  POST /api/discard", flush=True)
     if open_browser:
         try:
             import webbrowser
@@ -574,7 +676,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--open", action="store_true", help="Open a browser tab")
     args = p.parse_args(argv)
-    serve(host=args.host, port=args.port, open_browser=args.open, block=True)
+    try:
+        serve(host=args.host, port=args.port, open_browser=args.open, block=True)
+    except ValueError as exc:
+        print(exc)
+        return 1
     return 0
 
 

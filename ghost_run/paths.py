@@ -21,8 +21,49 @@ def is_within(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
         return True
-    except ValueError:
+    except (ValueError, OSError, RuntimeError):
         return False
+
+
+def contained_path(root: Path, rel: str) -> Optional[Path]:
+    """Resolve *rel* under *root* only when the target stays inside *root*.
+
+    Absolute paths, NUL bytes, the root itself, and symlink escapes return None.
+    A leading ``./`` is stripped; ``..`` is refused when it leaves *root*.
+    """
+    if not isinstance(rel, str):
+        return None
+    text = rel.strip()
+    while text.startswith("./"):
+        text = text[2:]
+    if not text or "\x00" in text:
+        return None
+    raw = Path(text)
+    if raw.is_absolute():
+        return None
+    root_r = root.resolve()
+    try:
+        candidate = (root_r / raw).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if candidate == root_r or not is_within(candidate, root_r):
+        return None
+    return candidate
+
+
+def tree_stays_inside(root: Path, start: Path) -> bool:
+    """True when *start* and every symlink under it resolve inside *root*."""
+    if not is_within(start, root):
+        return False
+    if not start.exists() or start.is_symlink() or not start.is_dir():
+        return True
+    root_r = root.resolve()
+    for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
+        for name in list(dirnames) + list(filenames):
+            child = Path(dirpath) / name
+            if child.is_symlink() and not is_within(child, root_r):
+                return False
+    return True
 
 
 def remap_to_ghost(

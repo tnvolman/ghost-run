@@ -32,6 +32,12 @@ def _py(code: str) -> str:
 @pytest.fixture
 def project(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("GHOST_RUN_TEST", raising=False)
+    # Existing cases exercise the command itself. The approval gate is covered
+    # in test_security.py; here a yes is recorded for the project+command.
+    monkeypatch.setattr(
+        "ghost_run.verify.prompt_verify_approval",
+        lambda root, command: "always",
+    )
     root = tmp_path / "proj"
     root.mkdir()
     (root / "keep.txt").write_text("keep\n", encoding="utf-8")
@@ -213,6 +219,9 @@ def test_demo_fixture_verifies_without_install(tmp_path: Path, monkeypatch):
     shutil.copytree(DEMO_FIXTURE, dest)
     turn_on(dest)
     state = get_state()
+    from ghost_run.verify import remember_approval
+
+    remember_approval(dest, "python3 scripts/ghost_verify.py")
     # node_modules is ignored by the ghost copy; the check must not need it.
     assert state.ghost_root is not None
     assert not (state.ghost_root / "node_modules").exists()
@@ -250,8 +259,13 @@ def test_ui_verify_is_advisory(project, monkeypatch):
     try:
         import urllib.request
 
+        token = httpd.ghost_token
         base = f"http://127.0.0.1:{port}"
-        with urllib.request.urlopen(f"{base}/", timeout=5) as resp:
+
+        def u(path: str) -> str:
+            return f"{base}{path}?token={token}"
+
+        with urllib.request.urlopen(u("/"), timeout=5) as resp:
             html = resp.read().decode()
         assert 'id="verifyBtn"' in html
         assert "Apply selected" in html
@@ -260,29 +274,29 @@ def test_ui_verify_is_advisory(project, monkeypatch):
         assert 'id="applyBtn" class="primary"' in html
         assert "applyBtn.disabled" not in html
 
-        missing = _post_json(f"{base}/api/verify", {})
+        missing = _post_json(u("/api/verify"), {})
         assert missing["ok"] is False
         assert missing["advisory"] is True
         assert missing["verify"]["error"] == NO_TEST_COMMAND
 
         monkeypatch.setenv("GHOST_RUN_TEST", _py("raise SystemExit(7)"))
-        body = _post_json(f"{base}/api/verify", {})
+        body = _post_json(u("/api/verify"), {})
         # Fail is a completed advisory run, not an HTTP failure, and not a gate.
         assert body["ok"] is True
         assert body["advisory"] is True
         assert body["verify"]["status"] == "fail"
         assert body["verify"]["exit_code"] == 7
 
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/diff", timeout=5) as resp:
+        with urllib.request.urlopen(u("/api/diff"), timeout=5) as resp:
             diff = json.loads(resp.read().decode())
         assert diff["verify"]["status"] == "fail"
 
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/verify", timeout=5) as resp:
+        with urllib.request.urlopen(u("/api/verify"), timeout=5) as resp:
             last = json.loads(resp.read().decode())
         assert last["verify"]["exit_code"] == 7
 
         apply_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/apply",
+            u("/api/apply"),
             data=json.dumps({"paths": ["keep.txt"]}).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
