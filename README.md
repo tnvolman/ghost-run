@@ -12,6 +12,8 @@ Automated (deterministic) runner:
 # HERMES_MODEL_API_KEY or OPENROUTER_API_KEY must be set (never printed)
 ./demo/run_demo.sh
 # → demo/pane.png, demo/copy-timing.json, demo/demo-run.log
+# pane.png is recaptured after thin Verify Pass. The log also records Fail
+# (ghost index.html removed, then restored). Apply still runs after Fail.
 ```
 
 Manual beats:
