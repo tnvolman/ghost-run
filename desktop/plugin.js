@@ -7,14 +7,14 @@
  *   - struck-through deletions
  *   - modified / added badges
  *   - unified diff view
- *   - Apply selected / Discard buttons wired to the local ghost UI API
+ *   - Verify (advisory Pass/Fail) / Apply selected / Discard wired to the local ghost UI API
  *     (hermes ghost ui → http://127.0.0.1:8765)
  *
  * Imports are limited to `@hermes/plugin-sdk` and `react` (desktop surface lint).
  * If the Desktop app is unavailable, use `hermes ghost ui` for the same pane.
  */
 import { Button, Tip } from '@hermes/plugin-sdk'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from 'react/jsx-runtime'
 
 const ID = 'ghost-run'
@@ -47,6 +47,11 @@ const CSS = `
 .ghost-empty{color:var(--ui-text-tertiary,#9aa3b2);padding:16px 4px}
 .ghost-counts{color:var(--ui-text-tertiary,#9aa3b2);margin-bottom:6px}
 .ghost-hint{padding:8px 10px;color:var(--ui-text-tertiary,#9aa3b2);font-size:11px;border-top:1px solid var(--ui-border,#2a2e37)}
+.ghost-verify{border:1px solid var(--ui-border,#2a2e37);border-radius:6px;padding:6px 8px;margin-bottom:6px;color:var(--ui-text-tertiary,#9aa3b2)}
+.ghost-verify[data-status=pass]{background:#143526;color:#7be8b0;border-color:#1f6b45}
+.ghost-verify[data-status=fail]{background:#3a1520;color:#ffb4c4;border-color:#5a2030}
+.ghost-verify[data-status=error]{background:#3a2a10;color:#f5c46a;border-color:#6a4a16}
+.ghost-verify-log{margin:0 0 6px;max-height:140px;overflow:auto;white-space:pre-wrap;font-family:var(--font-mono, ui-monospace, monospace);font-size:10.5px;background:#12151c;border:1px solid var(--ui-border,#2a2e37);border-radius:6px;padding:8px}
 `
 
 function colorizeLines(diff) {
@@ -60,6 +65,31 @@ function colorizeLines(diff) {
   })
 }
 
+function VerifyBanner({ verify }) {
+  if (!verify) {
+    return _jsx('div', {
+      className: 'ghost-verify',
+      children: 'Verify not run. Advisory only — Apply stays available either way.'
+    })
+  }
+  const cmd = verify.command ? ' · ' + verify.command : ''
+  let label = verify.error || 'Verify error'
+  let dataStatus = 'error'
+  if (verify.status === 'pass') {
+    dataStatus = 'pass'
+    label = 'Pass — exit ' + verify.exit_code + cmd
+  } else if (verify.status === 'fail') {
+    dataStatus = 'fail'
+    label = 'Fail — ' + (verify.timed_out ? 'timed out' : 'exit ' + verify.exit_code) + cmd
+  }
+  return _jsxs(_Fragment, {
+    children: [
+      _jsx('div', { className: 'ghost-verify', 'data-status': dataStatus, children: label }),
+      verify.log ? _jsx('pre', { className: 'ghost-verify-log', children: verify.log }) : null
+    ]
+  })
+}
+
 function GhostPane() {
   const [apiBase, setApiBase] = useState(DEFAULT_API)
   const [payload, setPayload] = useState(null)
@@ -67,6 +97,8 @@ function GhostPane() {
   const [selected, setSelected] = useState(() => new Set())
   const [active, setActive] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const verifyingRef = useRef(false)
   const [status, setStatus] = useState('')
 
   const changes = payload && payload.ok ? (payload.changes || []) : []
@@ -81,7 +113,13 @@ function GhostPane() {
       const res = await fetch(apiBase + '/api/diff')
       if (!res.ok) throw new Error('HTTP ' + res.status)
       const data = await res.json()
-      setPayload(data)
+      setPayload((prev) => {
+        // Keep the on-screen verify result while a run is in flight.
+        if (verifyingRef.current && prev && Object.prototype.hasOwnProperty.call(prev, 'verify')) {
+          data.verify = prev.verify
+        }
+        return data
+      })
       setError(null)
       if (data.ok && Array.isArray(data.changes)) {
         setSelected((prev) => {
@@ -122,7 +160,32 @@ function GhostPane() {
     })
   }
 
+  const runVerify = async () => {
+    // Advisory only. Do not set `busy` — that would disable Apply selected.
+    verifyingRef.current = true
+    setVerifying(true)
+    setStatus('Running verify…')
+    try {
+      const res = await fetch(apiBase + '/api/verify', { method: 'POST' })
+      const data = await res.json()
+      if (data.verify) {
+        setPayload((prev) => ({ ...(prev || { ok: true }), verify: data.verify }))
+        if (data.verify.status === 'pass') setStatus('Verify: Pass')
+        else if (data.verify.status === 'fail') setStatus('Verify: Fail (Apply stays available)')
+        else setStatus(data.verify.error || 'Verify error')
+      } else {
+        setStatus(data.error || 'verify failed')
+      }
+    } catch (err) {
+      setStatus(String(err && err.message ? err.message : err))
+    } finally {
+      verifyingRef.current = false
+      setVerifying(false)
+    }
+  }
+
   const applySelected = async () => {
+    // Verify Pass/Fail never gates this. Apply stays a human choice.
     const paths = [...selected]
     if (!paths.length) {
       setStatus('Select at least one path')
@@ -194,6 +257,13 @@ function GhostPane() {
           }),
           _jsx(Button, {
             size: 'sm',
+            variant: 'ghost',
+            disabled: verifying,
+            onClick: runVerify,
+            children: verifying ? 'Verifying…' : 'Verify'
+          }),
+          _jsx(Button, {
+            size: 'sm',
             disabled: busy || !changes.length,
             onClick: applySelected,
             children: 'Apply selected'
@@ -259,6 +329,7 @@ function GhostPane() {
                           ' deleted'
                         : ''
                   }),
+                  _jsx(VerifyBanner, { verify: payload && payload.verify }),
                   payload && payload.risk_counts
                     ? _jsx('div', {
                         className: 'ghost-counts',
@@ -354,7 +425,7 @@ function GhostPane() {
         : _jsx('div', {
             className: 'ghost-hint',
             children:
-              'Apply copies selected ghost changes onto the real folder. Discard deletes the sandbox.'
+              'Verify runs one configured test in the ghost copy and does not block Apply. Apply copies selected ghost changes onto the real folder. Discard deletes the sandbox.'
           })
     ]
   })

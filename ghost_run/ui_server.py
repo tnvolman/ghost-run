@@ -23,6 +23,7 @@ from .apply import apply_paths, discard_session
 from .diff import DiffReport, compute_diff
 from .risk import ai_enabled, annotate, blocked_flags, model_notes, summarize_counts
 from .state import get_state
+from .verify import run_verify
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -93,6 +94,7 @@ def current_diff_payload() -> Dict[str, Any]:
         "ghost_root": data["ghost_root"],
         "counts": data["counts"],
         "changes": changes,
+        "verify": state.last_verify,
     }
 
 
@@ -177,6 +179,18 @@ PANE_HTML = r"""<!DOCTYPE html>
   .toast.show { display: block; }
   .select-bar { display: flex; gap: 10px; margin-bottom: 8px; font-size: .8rem; color: var(--muted); }
   .select-bar a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .verify {
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    margin-bottom: 8px; font-size: .8rem; background: #1a1e28; color: var(--muted);
+  }
+  .verify.pass { background: #143526; color: #7be8b0; border-color: #1f6b45; }
+  .verify.fail { background: #3a1520; color: #ffb4c4; border-color: #5a2030; }
+  .verify.error { background: #3a2a10; color: #f5c46a; border-color: #6a4a16; }
+  .verify-log {
+    margin: 0 0 10px; max-height: 180px; overflow: auto; white-space: pre-wrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .75rem;
+    background: #12151c; border: 1px solid var(--border); border-radius: 8px; padding: 8px;
+  }
 </style>
 </head>
 <body>
@@ -185,6 +199,7 @@ PANE_HTML = r"""<!DOCTYPE html>
     <div class="meta" id="meta">Loading…</div>
     <div class="actions">
       <button id="refreshBtn" type="button">Refresh</button>
+      <button id="verifyBtn" type="button">Verify</button>
       <button id="applyBtn" class="primary" type="button">Apply selected</button>
       <button id="discardBtn" class="danger" type="button">Discard</button>
     </div>
@@ -192,6 +207,8 @@ PANE_HTML = r"""<!DOCTYPE html>
   <main>
     <section class="list">
       <div class="counts" id="counts"></div>
+      <div class="verify" id="verifyBanner">Verify not run. Advisory only — Apply stays available either way.</div>
+      <pre class="verify-log" id="verifyLog" hidden></pre>
       <div class="riskbar" id="riskbar"></div>
       <div id="blocked"></div>
       <div class="aisum" id="aisum"></div>
@@ -208,6 +225,7 @@ PANE_HTML = r"""<!DOCTYPE html>
   <div class="toast" id="toast"></div>
 <script>
 const state = { changes: [], selected: new Set(), active: null };
+let verifyInFlight = false;
 
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -228,6 +246,37 @@ function colorize(diff) {
     if (line.startsWith('@@')) return '<span class="line-hunk">' + esc + '</span>';
     return esc;
   }).join('\n');
+}
+
+function renderVerify(v) {
+  const banner = document.getElementById('verifyBanner');
+  const log = document.getElementById('verifyLog');
+  if (!v) {
+    banner.className = 'verify';
+    banner.textContent = 'Verify not run. Advisory only — Apply stays available either way.';
+    log.hidden = true;
+    log.textContent = '';
+    return;
+  }
+  const cmd = v.command ? ' · ' + v.command : '';
+  if (v.status === 'pass') {
+    banner.className = 'verify pass';
+    banner.textContent = 'Pass — exit ' + v.exit_code + cmd;
+  } else if (v.status === 'fail') {
+    banner.className = 'verify fail';
+    const why = v.timed_out ? 'timed out' : ('exit ' + v.exit_code);
+    banner.textContent = 'Fail — ' + why + cmd;
+  } else {
+    banner.className = 'verify error';
+    banner.textContent = v.error || 'Verify error';
+  }
+  if (v.log) {
+    log.hidden = false;
+    log.textContent = v.log;
+  } else {
+    log.hidden = true;
+    log.textContent = '';
+  }
 }
 
 function render() {
@@ -297,6 +346,7 @@ async function loadDiff() {
   document.getElementById('aisum').textContent =
     ai.status === 'ok' && ai.summary ? 'AI summary: ' + ai.summary
     : ai.status === 'fallback' ? 'AI summary unavailable; showing heuristic flags.' : '';
+  if (!verifyInFlight) renderVerify(data.verify || null);
   // Keep prior selection when paths still exist; default-select all on first load.
   if (state.selected.size === 0) {
     state.changes.forEach(c => state.selected.add(c.path));
@@ -314,6 +364,28 @@ async function loadDiff() {
 }
 
 document.getElementById('refreshBtn').onclick = () => loadDiff().catch(e => toast(String(e)));
+document.getElementById('verifyBtn').onclick = async () => {
+  // Advisory only: do not disable Apply selected while this runs or on Fail.
+  const btn = document.getElementById('verifyBtn');
+  verifyInFlight = true;
+  btn.disabled = true;
+  document.getElementById('verifyBanner').className = 'verify';
+  document.getElementById('verifyBanner').textContent = 'Running verify…';
+  try {
+    const res = await fetch('/api/verify', { method: 'POST' });
+    const data = await res.json();
+    if (data.verify) renderVerify(data.verify);
+    else {
+      document.getElementById('verifyBanner').className = 'verify error';
+      document.getElementById('verifyBanner').textContent = data.error || 'verify failed';
+    }
+  } catch (e) {
+    toast(String(e));
+  } finally {
+    verifyInFlight = false;
+    btn.disabled = false;
+  }
+};
 document.getElementById('selAll').onclick = () => {
   state.changes.forEach(c => state.selected.add(c.path)); render();
 };
@@ -392,6 +464,10 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._json(200, {"ok": True, "service": "ghost-run-ui"})
             return
+        if path == "/api/verify":
+            state = get_state()
+            self._json(200, {"ok": True, "verify": state.last_verify, "advisory": True})
+            return
         self._json(404, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -422,6 +498,21 @@ class GhostUIHandler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True, "message": msg})
             return
 
+        if path == "/api/verify":
+            result = run_verify(get_state())
+            # Pass and Fail are both successful advisory runs. A red result
+            # does not block Apply. ok is false when the command did not run.
+            self._json(
+                200,
+                {
+                    "ok": result.get("status") in ("pass", "fail"),
+                    "verify": result,
+                    "advisory": True,
+                    "error": result.get("error"),
+                },
+            )
+            return
+
         self._json(404, {"ok": False, "error": "not found"})
 
 
@@ -449,8 +540,10 @@ def serve(
     write_port_file(bound)
     url = f"http://{host}:{bound}/"
     print(f"Ghost Run UI: {url}")
-    print("  GET  /           interactive Apply/Discard pane")
-    print("  GET  /api/diff   JSON change list")
+    print("  GET  /           interactive Verify / Apply / Discard pane")
+    print("  GET  /api/diff   JSON change list (includes last verify)")
+    print("  GET  /api/verify last verify result")
+    print("  POST /api/verify run configured test in the ghost copy (advisory)")
     print("  POST /api/apply  {\"paths\":[...]}  — empty/omit = all")
     print("  POST /api/discard")
     if open_browser:

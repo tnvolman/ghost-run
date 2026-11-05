@@ -7,6 +7,7 @@ when available, else `ctx.register({ area: 'panes', ... })`) that renders:
 - struck-through deletions
 - added / modified badges
 - unified diff preview
+- **Verify** (advisory Pass/Fail + truncated log; does not block Apply)
 - **Apply selected** / **Discard** buttons
 
 The pane talks to the local agent-half API started by:
