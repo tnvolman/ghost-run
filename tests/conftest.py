@@ -13,6 +13,7 @@ if str(ROOT) not in sys.path:
 # Import the library package only (subdirectory ghost_run/), never the plugin
 # root __init__.py as a module under test.
 from ghost_run.state import reset_state  # noqa: E402
+from ghost_run.verify import clear_session_approvals  # noqa: E402
 
 FIXTURE = Path(__file__).parent / "fixtures" / "demo_project"
 
@@ -23,7 +24,9 @@ def _clean_state(tmp_path_factory, monkeypatch):
     session = tmp_path_factory.mktemp("ghost-session") / "active.json"
     monkeypatch.setenv("GHOST_RUN_SESSION_FILE", str(session))
     reset_state()
+    clear_session_approvals()
     yield
+    clear_session_approvals()
     reset_state()
 
 

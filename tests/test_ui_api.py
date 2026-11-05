@@ -30,9 +30,13 @@ def ui_session(tmp_path, monkeypatch):
     (state.ghost_root / "src" / "keep.js").write_text("keep-v2\n", encoding="utf-8")
     (state.ghost_root / "NOTE.md").write_text("added\n", encoding="utf-8")
     httpd, port = serve(host="127.0.0.1", port=0, block=False)
-    yield root, state, port
+    yield root, state, port, httpd.ghost_token
     httpd.shutdown()
     reset_state()
+
+
+def _url(port: int, token: str, path: str) -> str:
+    return f"http://127.0.0.1:{port}{path}?token={token}"
 
 
 def _get(url: str):
@@ -52,8 +56,8 @@ def _post(url: str, payload: dict):
 
 
 def test_diff_lists_badges_kinds(ui_session):
-    root, state, port = ui_session
-    data = _get(f"http://127.0.0.1:{port}/api/diff")
+    root, state, port, token = ui_session
+    data = _get(_url(port, token, "/api/diff"))
     assert data["ok"] is True
     kinds = {c["path"]: c["kind"] for c in data["changes"]}
     assert kinds["src/gone.js"] == "deleted"
@@ -65,16 +69,16 @@ def test_diff_lists_badges_kinds(ui_session):
 
 
 def test_apply_selected_and_discard(ui_session):
-    root, state, port = ui_session
+    root, state, port, token = ui_session
     # Apply only the deletion
-    out = _post(f"http://127.0.0.1:{port}/api/apply", {"paths": ["src/gone.js"]})
+    out = _post(_url(port, token, "/api/apply"), {"paths": ["src/gone.js"]})
     assert out["ok"] is True
     assert not (root / "src" / "gone.js").exists()
     assert (root / "src" / "keep.js").read_text() == "keep\n"  # not applied
     assert not (root / "NOTE.md").exists()
 
     # Discard tears down sandbox
-    out = _post(f"http://127.0.0.1:{port}/api/discard", {})
+    out = _post(_url(port, token, "/api/discard"), {})
     assert out["ok"] is True
     st = get_state()
     assert st.enabled is False
@@ -82,9 +86,10 @@ def test_apply_selected_and_discard(ui_session):
 
 
 def test_pane_html_has_controls(ui_session):
-    _, _, port = ui_session
-    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+    _, _, port, token = ui_session
+    with urllib.request.urlopen(_url(port, token, "/"), timeout=5) as resp:
         html = resp.read().decode()
+        assert "access-control-allow-origin" not in {k.lower() for k in resp.headers}
     assert "Apply selected" in html
     assert "Discard" in html
     assert "checkbox" in html

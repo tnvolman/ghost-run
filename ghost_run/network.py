@@ -40,6 +40,29 @@ _NETWORK_CMD_PATTERN = re.compile(
 )
 
 
+# These tools run code, message someone, spawn another agent, or schedule
+# work on the host. They are not remapped into the ghost copy, so Ghost Mode
+# blocks them instead of pretending the dry run covers them.
+BYPASS_TOOLS: FrozenSet[str] = frozenset(
+    {
+        "execute_code",
+        "send_message",
+        "delegate_task",
+        "cronjob",
+    }
+)
+
+
+def bypass_tool_reason(tool_name: str) -> Optional[str]:
+    """Block tools that would act outside the ghost copy."""
+    if tool_name in BYPASS_TOOLS:
+        return (
+            f"ghost-run: blocked {tool_name!r} while Ghost Mode is on "
+            "(it bypasses the ghost copy)"
+        )
+    return None
+
+
 def is_network_tool(tool_name: str) -> bool:
     if not tool_name:
         return False

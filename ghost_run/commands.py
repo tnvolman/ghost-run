@@ -10,7 +10,7 @@ from .apply import apply_paths, discard_session
 from .diff import compute_diff
 from .report import write_html_report
 from .sandbox import create_ghost_copy, discard_ghost_copy
-from .state import get_state
+from .state import clear_pending_blocks, get_state
 from .ui_server import DEFAULT_HOST, DEFAULT_PORT, serve
 from .verify import format_verify, run_verify
 
@@ -46,11 +46,15 @@ def turn_on(real_root: Optional[Path] = None) -> str:
     if state.ghost_root:
         discard_ghost_copy(state.ghost_root)
 
-    ghost = create_ghost_copy(root)
+    try:
+        ghost = create_ghost_copy(root)
+    except (RuntimeError, OSError) as exc:
+        return f"Ghost Mode: OFF\n  {exc}"
     state.enabled = True
     state.real_root = root
     state.ghost_root = ghost
     state.pending_block = None
+    clear_pending_blocks()
     state.flags.clear()
     state.last_verify = None
     from .risk import clear_blocks
@@ -115,7 +119,9 @@ def slash_ghost(raw_args: str) -> str:
         # Non-blocking hint — full server via CLI `hermes ghost ui`
         return (
             "Start the interactive pane with: hermes ghost ui\n"
-            "Then open http://127.0.0.1:8765/ (Verify / Apply selected / Discard)."
+            "The command prints http://127.0.0.1:<port>/?token=<random>. "
+            "Open that exact URL. The Host header must be 127.0.0.1:<port> "
+            "or localhost:<port>, and every request must carry the token."
         )
     return (
         "Usage: /ghost on|off|status|diff|verify|apply [paths...]|discard|ui\n"
@@ -210,11 +216,14 @@ def handle_cli(args: argparse.Namespace) -> None:
             print(f"  {a}")
         return
     if action == "ui":
-        serve(
-            host=getattr(args, "host", DEFAULT_HOST),
-            port=int(getattr(args, "port", DEFAULT_PORT) or DEFAULT_PORT),
-            open_browser=bool(getattr(args, "open", False)),
-            block=True,
-        )
+        try:
+            serve(
+                host=getattr(args, "host", DEFAULT_HOST),
+                port=int(getattr(args, "port", DEFAULT_PORT) or DEFAULT_PORT),
+                open_browser=bool(getattr(args, "open", False)),
+                block=True,
+            )
+        except ValueError as exc:
+            print(exc)
         return
     print(f"ghost-run: unknown action {action!r}")

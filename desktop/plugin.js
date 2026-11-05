@@ -8,7 +8,8 @@
  *   - modified / added badges
  *   - unified diff view
  *   - Verify (advisory Pass/Fail) / Apply selected / Discard wired to the local ghost UI API
- *     (hermes ghost ui → http://127.0.0.1:8765)
+ *     (hermes ghost ui → http://127.0.0.1:<port>/?token=<random>)
+ *     Set the API base to that full URL. Host must be 127.0.0.1 or localhost.
  *
  * Imports are limited to `@hermes/plugin-sdk` and `react` (desktop surface lint).
  * If the Desktop app is unavailable, use `hermes ghost ui` for the same pane.
@@ -19,6 +20,21 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from 'react/jsx-run
 
 const ID = 'ghost-run'
 const DEFAULT_API = 'http://127.0.0.1:8765'
+
+function apiUrl(base, path) {
+  let origin = DEFAULT_API
+  let token = ''
+  try {
+    const parsed = new URL(base || DEFAULT_API)
+    origin = parsed.origin
+    token = parsed.searchParams.get('token') || ''
+  } catch (err) {
+    origin = DEFAULT_API
+  }
+  const url = new URL(path, origin + '/')
+  if (token) url.searchParams.set('token', token)
+  return url.toString()
+}
 
 const CSS = `
 .ghost-pane{display:flex;flex-direction:column;height:100%;min-height:0;color:var(--ui-text-primary, #e6e6e6);background:var(--ui-bg, #0f1115);font-size:12px}
@@ -110,7 +126,7 @@ function GhostPane() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(apiBase + '/api/diff')
+      const res = await fetch(apiUrl(apiBase, '/api/diff'))
       if (!res.ok) throw new Error('HTTP ' + res.status)
       const data = await res.json()
       setPayload((prev) => {
@@ -133,7 +149,7 @@ function GhostPane() {
       setError(
         'Cannot reach Ghost UI at ' +
           apiBase +
-          '. Start it with: hermes ghost ui. (' +
+          '. Start it with: hermes ghost ui and paste the printed http://127.0.0.1:<port>/?token= URL. (' +
           String(err && err.message ? err.message : err) +
           ')'
       )
@@ -166,7 +182,7 @@ function GhostPane() {
     setVerifying(true)
     setStatus('Running verify…')
     try {
-      const res = await fetch(apiBase + '/api/verify', { method: 'POST' })
+      const res = await fetch(apiUrl(apiBase, '/api/verify'), { method: 'POST' })
       const data = await res.json()
       if (data.verify) {
         setPayload((prev) => ({ ...(prev || { ok: true }), verify: data.verify }))
@@ -193,7 +209,7 @@ function GhostPane() {
     }
     setBusy(true)
     try {
-      const res = await fetch(apiBase + '/api/apply', {
+      const res = await fetch(apiUrl(apiBase, '/api/apply'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ paths })
@@ -212,7 +228,7 @@ function GhostPane() {
   const discardAll = async () => {
     setBusy(true)
     try {
-      const res = await fetch(apiBase + '/api/discard', { method: 'POST' })
+      const res = await fetch(apiUrl(apiBase, '/api/discard'), { method: 'POST' })
       const data = await res.json()
       setStatus(data.message || (data.ok ? 'Discarded' : 'discard failed'))
       setSelected(new Set())

@@ -110,7 +110,9 @@ def test_payload_has_risk_blocked_and_permissions(session):
 def test_ui_has_low_risk_button(session):
     httpd, port = serve(host="127.0.0.1", port=0, block=False)
     try:
-        html = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5).read().decode()
+        html = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/?token={httpd.ghost_token}", timeout=5
+        ).read().decode()
     finally:
         httpd.shutdown()
     assert "Select only low-risk" in html

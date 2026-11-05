@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -25,8 +26,8 @@ class GhostState:
     enabled: bool = False
     real_root: Optional[Path] = None
     ghost_root: Optional[Path] = None
-    # Set by tool_request when a call should be blocked by pre_tool_call.
-    # Memory-only; not persisted (per tool-call within one agent process).
+    # Legacy single slot. Concurrent calls use ``set_pending_block`` instead
+    # so one tool call cannot clear another's block. Not persisted.
     pending_block: Optional[str] = None
     flags: list[str] = field(default_factory=list)
     # Last thin-Verify result (advisory). Persisted so the UI can reload it.
@@ -59,6 +60,40 @@ class GhostState:
 
 
 _STATE = GhostState()
+
+# One pending block per tool call. ``tool_call_id`` is the slot when Hermes
+# supplies it; otherwise the calling thread is the slot. Middleware sets the
+# slot and the matching pre_tool_call pops it, so concurrent calls do not
+# clobber each other.
+_pending_lock = threading.Lock()
+_pending_slots: dict[str, str] = {}
+
+
+def pending_slot_key(tool_call_id: str = "") -> str:
+    if tool_call_id:
+        return "call:" + tool_call_id
+    return "thread:" + str(threading.get_ident())
+
+
+_MAX_PENDING_SLOTS = 256
+
+
+def set_pending_block(message: str, tool_call_id: str = "") -> None:
+    with _pending_lock:
+        key = pending_slot_key(tool_call_id)
+        if key not in _pending_slots and len(_pending_slots) >= _MAX_PENDING_SLOTS:
+            _pending_slots.pop(next(iter(_pending_slots)))
+        _pending_slots[key] = message
+
+
+def pop_pending_block(tool_call_id: str = "") -> Optional[str]:
+    with _pending_lock:
+        return _pending_slots.pop(pending_slot_key(tool_call_id), None)
+
+
+def clear_pending_blocks() -> None:
+    with _pending_lock:
+        _pending_slots.clear()
 
 
 def _delete_session_file() -> None:
@@ -128,4 +163,5 @@ def reset_state() -> None:
     _STATE.pending_block = None
     _STATE.flags.clear()
     _STATE.last_verify = None
+    clear_pending_blocks()
     _delete_session_file()

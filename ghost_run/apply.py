@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
-from .diff import DiffReport, compute_diff
+from .diff import compute_diff
+from .paths import contained_path, tree_stays_inside
 from .sandbox import discard_ghost_copy
 from .state import GhostState
 
@@ -30,7 +31,8 @@ def apply_paths(
     ghost_root = state.ghost_root.resolve()
     report = compute_diff(real_root, ghost_root)
 
-    wanted = {p.strip().lstrip("./") for p in (paths or []) if p and p.strip()}
+    wanted = {_clean_rel(p) for p in (paths or []) if p and str(p).strip()}
+    wanted.discard("")
     if not wanted:
         wanted = {ch.path for ch in report.all_changes}
 
@@ -39,11 +41,16 @@ def apply_paths(
 
     for rel in sorted(wanted):
         ch = change_by_path.get(rel)
-        dest = real_root / rel
-        src = ghost_root / rel
+        # Resolve first and refuse escapes. Operate on the lexical path so a
+        # symlink is not followed into a different file before the check.
+        dest = _io_path(real_root, rel)
+        src = _io_path(ghost_root, rel)
+        if dest is None or src is None:
+            actions.append(f"refused {rel} (outside project root)")
+            continue
         if ch is None:
             # Path named explicitly but not in diff — if it exists in ghost, copy anyway.
-            if src.is_file():
+            if src.is_file() and tree_stays_inside(ghost_root, src):
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src, dest)
                 actions.append(f"copied (forced) {rel}")
@@ -55,6 +62,9 @@ def apply_paths(
             if not src.exists():
                 actions.append(f"skipped {rel} (missing in ghost)")
                 continue
+            if not tree_stays_inside(ghost_root, src):
+                actions.append(f"refused {rel} (outside project root)")
+                continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             if src.is_dir():
                 if dest.exists():
@@ -64,8 +74,11 @@ def apply_paths(
                 shutil.copy2(src, dest)
             actions.append(f"{ch.kind} → applied {rel}")
         elif ch.kind == "deleted":
+            if not tree_stays_inside(real_root, dest):
+                actions.append(f"refused {rel} (outside project root)")
+                continue
             if dest.exists():
-                if dest.is_dir():
+                if dest.is_dir() and not dest.is_symlink():
                     shutil.rmtree(dest)
                 else:
                     dest.unlink()
@@ -76,6 +89,21 @@ def apply_paths(
             actions.append(f"skipped {rel} (unknown kind {ch.kind})")
 
     return actions
+
+
+def _clean_rel(rel: str) -> str:
+    """Strip surrounding space and a leading ``./`` without eating ``.env``."""
+    text = str(rel).strip()
+    while text.startswith("./"):
+        text = text[2:]
+    return text
+
+
+def _io_path(root: Path, rel: str) -> Optional[Path]:
+    """Lexical path under *root* after ``contained_path`` says it stays inside."""
+    if contained_path(root, rel) is None:
+        return None
+    return root.resolve() / _clean_rel(rel)
 
 
 def discard_session(state: GhostState) -> str:
