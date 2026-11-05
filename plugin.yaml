@@ -1,0 +1,28 @@
+name: ghost-run
+version: 0.1.0
+description: >
+  Dry-run mode for Hermes Agent. While Ghost Mode is on, file writes/edits/deletes
+  and terminal tools are redirected into a throwaway copy of the working folder;
+  network-touching tools and commands are blocked. Review the diff, then apply
+  selected paths or discard. Slash: /ghost on|off|status. CLI: hermes ghost
+  diff|apply|discard.
+author: "Plugin Parker (tnvolman)"
+kind: standalone
+license: MIT
+homepage: ""
+tags:
+  - safety
+  - dry-run
+  - sandbox
+  - diff
+provides_hooks:
+  - pre_tool_call
+provides_middleware:
+  - tool_request
+# Declared registrations must match register() exactly (catalog admission).
+# Slash + CLI commands are registered at runtime; listed here for humans and
+# newer Hermes validators that probe command registration.
+provides_commands:
+  - ghost
+provides_cli_commands:
+  - ghost

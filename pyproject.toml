@@ -1,0 +1,11 @@
+[project]
+name = "ghost-run"
+version = "0.1.0"
+description = "Ghost Run — dry-run sandbox plugin for Hermes Agent"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Plugin Parker / tnvolman" }]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
