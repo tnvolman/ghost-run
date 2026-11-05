@@ -73,9 +73,9 @@ def render_html(report: DiffReport) -> str:
   </table>
   {blocks}
   <p class="note">
-    Desktop pane API: this HTML is the fallback when a live Hermes Desktop pane
-    is unavailable. Apply with <code>hermes ghost apply [paths...]</code> or
-    discard with <code>hermes ghost discard</code>.
+    Prefer the interactive pane: <code>hermes ghost ui</code> (localhost) or the
+    Desktop <code>plugin.js</code> pane (checkboxes, badges, Apply selected / Discard).
+    CLI: <code>hermes ghost apply [paths...]</code> / <code>hermes ghost discard</code>.
   </p>
 </body>
 </html>

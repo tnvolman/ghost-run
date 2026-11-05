@@ -6,11 +6,21 @@
 
 ## 90-second demo script
 
-1. `cd` into a small project (or `tests/fixtures/demo_project`).
-2. `/ghost on` — Hermes copies the tree into a temp sandbox.
+Automated (deterministic) runner:
+
+```bash
+# HERMES_MODEL_API_KEY or OPENROUTER_API_KEY must be set (never printed)
+./demo/run_demo.sh
+# → demo/pane.png, demo/copy-timing.json, demo/demo-run.log
+```
+
+Manual beats:
+
+1. `cd` into `demo/fixture` (small web project with obvious unused files).
+2. `/ghost on` — Hermes CoW/hardlink-copies the tree into a temp sandbox (skips `.git`, `node_modules`, venvs, build dirs; configurable via `.ghost-runignore` / `GHOST_RUN_IGNORE`).
 3. Ask the agent: **"delete unused files"** (or have it `write_file` / `rm` via `terminal`).
-4. Run `hermes ghost diff` — pane/HTML shows deletions with strike-through; `ls` on the real folder shows files still there.
-5. `hermes ghost apply src/unused_tmp.py notes.txt brand_new.txt` — only those paths land on disk — **or** `hermes ghost discard` to throw the sandbox away.
+4. `hermes ghost ui` — interactive Apply/Discard pane on localhost (checkboxes, badges, struck-through deletions, unified diff). Desktop `desktop/plugin.js` registers the same pane via `ctx.openWorkspace` / `area: 'panes'`.
+5. Apply selected paths — **or** Discard. Real disk stays untouched until Apply.
 
 ## Install (dev)
 
@@ -27,8 +37,8 @@ Or copy this directory into `~/.hermes/plugins/ghost-run`.
 
 | Surface | Usage |
 |--------|--------|
-| Slash | `/ghost on\|off\|status\|diff\|apply [paths...]\|discard` |
-| CLI | `hermes ghost on\|off\|status\|diff\|apply [paths...]\|discard` |
+| Slash | `/ghost on\|off\|status\|diff\|apply [paths...]\|discard\|ui` |
+| CLI | `hermes ghost on\|off\|status\|diff\|apply [paths...]\|discard\|ui` |
 
 ## Exact Hermes APIs used
 
@@ -43,9 +53,30 @@ Public `PluginContext` only — **no core overrides**:
 
 Target built-in tools (Hermes 0.19+): `write_file`, `patch`, `read_file`, `search_files`, `terminal`, `process_manage`.
 
-## Desktop pane
+## Desktop pane + localhost fallback
 
-`desktop/plugin.js` attempts `ctx.register({ area: 'panes', ... })`. **Interactive Apply/Discard inside Desktop is unproven** in this local build. Supported fallback: `hermes ghost diff` writes `ghost-run-diff.html` (struck-through deletions).
+`desktop/plugin.js` registers a real React pane (imports only `@hermes/plugin-sdk` + `react`):
+
+- per-file checkboxes, added/modified badges, struck-through deletions
+- unified diff preview
+- **Apply selected** / **Discard** wired to `http://127.0.0.1:8765/api/*`
+
+Because the Electron Desktop app may not run headless on the box, ship the same UX via:
+
+```bash
+hermes ghost ui          # http://127.0.0.1:8765/
+hermes ghost ui --open
+```
+
+`hermes ghost diff` still writes a static `ghost-run-diff.html` snapshot.
+
+## Speed
+
+Ghost copies prefer filesystem CoW / hardlinks when possible:
+
+1. `cp --reflink=auto` → 2. `cp -a --link` → 3. per-file `os.link` → 4. filtered `copy2`
+
+Override with `GHOST_RUN_COPY_STRATEGY=reflink|hardlink|hardlink-file|copy`. Ignore patterns: built-in (`.git`, `node_modules`, `.venv`, `dist`, `build`, …) plus `.ghost-runignore` and `GHOST_RUN_IGNORE=dir1,dir2`. See `demo/copy-timing.json` after `./demo/run_demo.sh`.
 
 ## Tests
 

@@ -1,8 +1,30 @@
-# Ghost Run Desktop half
+# Ghost Run — Desktop half
 
-Optional. The agent half does not depend on Desktop.
+`plugin.js` registers a Hermes Desktop **panes** surface (via `ctx.openWorkspace`
+when available, else `ctx.register({ area: 'panes', ... })`) that renders:
 
-- **Proven locally:** text diff + `ghost-run-diff.html` (struck-through deletions).
-- **Unproven:** live interactive pane with Apply/Discard buttons inside Hermes Desktop.
-  `plugin.js` attempts `ctx.register({ area: 'panes', ... })` per the Desktop plugin SDK docs.
-  If your Desktop build rejects that shape, keep using `hermes ghost diff|apply|discard`.
+- per-file checkboxes
+- struck-through deletions
+- added / modified badges
+- unified diff preview
+- **Apply selected** / **Discard** buttons
+
+The pane talks to the local agent-half API started by:
+
+```bash
+hermes ghost ui
+# → http://127.0.0.1:8765/
+```
+
+Imports are limited to `@hermes/plugin-sdk` and `react` / `react/jsx-runtime`
+(see Hermes `plugin_validate_desktop.py`).
+
+## Headless / screen-record fallback
+
+The full Electron Desktop app is not required for demos. Run:
+
+```bash
+hermes ghost ui --port 8765
+```
+
+Then open or screenshot `http://127.0.0.1:8765/` — same interactive pane.

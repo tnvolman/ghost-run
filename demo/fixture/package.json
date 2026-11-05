@@ -1,0 +1,9 @@
+{
+  "name": "ghost-demo-site",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tiny demo site for Ghost Run — intentionally has unused files",
+  "scripts": {
+    "start": "python3 -m http.server 4173"
+  }
+}

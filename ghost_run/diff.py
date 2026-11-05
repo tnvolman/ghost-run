@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
-from .sandbox import DEFAULT_IGNORE_DIR_NAMES
+from .ignore import DEFAULT_IGNORE_DIR_NAMES, load_ignore_dirs
 
 
 @dataclass
@@ -62,7 +62,7 @@ def _list_rel_files(root: Path, ignore_dirs: Set[str]) -> Dict[str, Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in ignore_dirs]
         for name in filenames:
-            if name == ".ghost-run-marker":
+            if name in (".ghost-run-marker", ".ghost-run-strategy", "ghost-run-diff.html"):
                 continue
             full = Path(dirpath) / name
             rel = full.relative_to(root).as_posix()
@@ -93,7 +93,8 @@ def compute_diff(
     *,
     ignore_dirs: Optional[Iterable[str]] = None,
 ) -> DiffReport:
-    ignore = set(DEFAULT_IGNORE_DIR_NAMES)
+    ignore = load_ignore_dirs(real_root)
+    ignore.update(DEFAULT_IGNORE_DIR_NAMES)
     if ignore_dirs:
         ignore.update(ignore_dirs)
 

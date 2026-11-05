@@ -5,7 +5,7 @@ description: >
   and terminal tools are redirected into a throwaway copy of the working folder;
   network-touching tools and commands are blocked. Review the diff, then apply
   selected paths or discard. Slash: /ghost on|off|status. CLI: hermes ghost
-  diff|apply|discard.
+  diff|apply|discard|ui.
 author: "Plugin Parker (tnvolman)"
 kind: standalone
 license: MIT

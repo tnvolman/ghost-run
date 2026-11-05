@@ -11,6 +11,7 @@ from .diff import compute_diff
 from .report import write_html_report
 from .sandbox import create_ghost_copy, discard_ghost_copy
 from .state import get_state
+from .ui_server import DEFAULT_HOST, DEFAULT_PORT, serve
 
 
 def _status_text() -> str:
@@ -93,8 +94,14 @@ def slash_ghost(raw_args: str) -> str:
         except RuntimeError as exc:
             return str(exc)
         return "Applied:\n" + "\n".join(f"  {a}" for a in actions)
+    if cmd == "ui":
+        # Non-blocking hint — full server via CLI `hermes ghost ui`
+        return (
+            "Start the interactive pane with: hermes ghost ui\n"
+            "Then open http://127.0.0.1:8765/ (Apply selected / Discard)."
+        )
     return (
-        "Usage: /ghost on|off|status|diff|apply [paths...]|discard\n"
+        "Usage: /ghost on|off|status|diff|apply [paths...]|discard|ui\n"
         f"Unknown subcommand: {cmd!r}"
     )
 
@@ -135,6 +142,18 @@ def setup_cli(subparser: argparse.ArgumentParser) -> None:
     )
     sub.add_parser("off", help="Disable Ghost Mode and discard the sandbox")
 
+    ui_p = sub.add_parser(
+        "ui",
+        help="Serve interactive Apply/Discard pane on localhost (Desktop fallback)",
+    )
+    ui_p.add_argument("--host", default=DEFAULT_HOST, help="Bind host (default 127.0.0.1)")
+    ui_p.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port (default 8765)")
+    ui_p.add_argument(
+        "--open",
+        action="store_true",
+        help="Open a browser tab to the pane",
+    )
+
 
 def handle_cli(args: argparse.Namespace) -> None:
     """handler_fn for ``hermes ghost ...``."""
@@ -165,5 +184,13 @@ def handle_cli(args: argparse.Namespace) -> None:
         print("Applied:")
         for a in actions:
             print(f"  {a}")
+        return
+    if action == "ui":
+        serve(
+            host=getattr(args, "host", DEFAULT_HOST),
+            port=int(getattr(args, "port", DEFAULT_PORT) or DEFAULT_PORT),
+            open_browser=bool(getattr(args, "open", False)),
+            block=True,
+        )
         return
     print(f"ghost-run: unknown action {action!r}")

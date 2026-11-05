@@ -317,3 +317,13 @@ Messages:       4 (1 user, 2 tool calls)
 ## Spend
 
 OpenRouter free route → **~$0.00**. Cap on key was $5; unused for paid models.
+
+
+## Follow-up live run (Keep trucking)
+
+- When: 2026-11-04T22:38:11.488476-05:00
+- Model: openrouter/free (key not printed)
+- Agent log: `demo/live2-agent.log`
+- Proof: real untouched until selective apply; apply one deletion; discard rest.
+- UI screenshot: `demo/pane.png` (from `demo/run_demo.sh`)
+- Copy timing (~5k files): `demo/copy-timing.json` (hardlink ~0.05s, reflink ~0.09s, copy ~0.26s on this box)

@@ -1,0 +1,30 @@
+{
+  "tree_files_approx": 5000,
+  "results": {
+    "auto": {
+      "seconds": 0.1168,
+      "used": "reflink",
+      "files_in_ghost": 5000
+    },
+    "hardlink": {
+      "seconds": 0.0462,
+      "used": "hardlink",
+      "files_in_ghost": 5000
+    },
+    "hardlink-file": {
+      "seconds": 0.0922,
+      "used": "hardlink-file",
+      "files_in_ghost": 5000
+    },
+    "copy": {
+      "seconds": 0.2565,
+      "used": "copy",
+      "files_in_ghost": 5000
+    },
+    "reflink": {
+      "seconds": 0.0891,
+      "used": "reflink",
+      "files_in_ghost": 5000
+    }
+  }
+}

@@ -1,0 +1,4 @@
+# Extra ignore names for Ghost Run copies/diffs
+node_modules
+dist
+.tmp

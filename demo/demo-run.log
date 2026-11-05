@@ -1,0 +1,149 @@
+== Ghost Run demo ==
+work copy: /tmp/ghost-demo-vZZck3
+
+Beat 1: fixture ready (11 files)
+Beat 2: hermes ghost on
+Ghost Mode: ON
+  real:  /tmp/ghost-demo-vZZck3
+  ghost: /tmp/ghost-run-ka2mc8b1-ghost-demo-vZZck3
+File/terminal tools now write into the ghost copy. Network tools/commands are blocked. Use /ghost status, hermes ghost diff|apply|discard when done.
+Beat 3: agent cleanup via openrouter/free (key not printed)
+Query: You are cleaning a tiny web project. Delete ONLY these unused files if 
+they exist: src/unused_legacy.js, src/old_helper.js, tmp/cache.tmp. Do not 
+modify index.html, src/app.js, public/styles.css, package.json, or README.md. 
+Use delete/remove tools or terminal rm. Be brief.
+Initializing agent...
+────────────────────────────────────────
+
+
+┌─ Reasoning ──────────────────────────────────────────────────────────────────┐
+The user wants me to delete three specific files if they exist, without modifying
+ any other files. Let me just use terminal rm with -f flag for safety (won't error if
+ file doesn't exist).
+└──────────────────────────────────────────────────────────────────────────────┘
+  ┊ 💻 preparing terminal…
+  ┊ 💻 $         rm -f src/unused_legacy.js src/old_helper.js tmp/cache.tmp + 1 command  2.1s
+
+┌─ Reasoning ──────────────────────────────────────────────────────────────────┐
+Done. Files deleted if they existed; rm -f silently no-ops if missing.
+└──────────────────────────────────────────────────────────────────────────────┘
+
+╭─ ⚕ Hermes ───────────────────────────────────────────────────────────────────╮
+    Done. The three files were removed (rm -f silently skipped any that didn't exist):
+    
+    - src/unused_legacy.js
+    - src/old_helper.js
+    - tmp/cache.tmp
+    
+    No other files were touched.
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+Resume this session with:
+  hermes --resume 20261104_223630_6a4fbd
+
+Session:        20261104_223630_6a4fbd
+Duration:       8s
+Messages:       4 (1 user, 2 tool calls)
+demo ensure: removed [] in ghost; added CLEANUP_NOTES.md
+demo ensure: real folder still has unused files (isolation OK)
+Beat 4: ghost diff
+Ghost Run diff — real: /tmp/ghost-demo-vZZck3
+                 ghost: /tmp/ghost-run-ka2mc8b1-ghost-demo-vZZck3
+  +2 added  ~0 modified  -3 deleted
+
+  + .ghost-run-strategy
+  + CLEANUP_NOTES.md
+  - src/old_helper.js
+  - src/unused_legacy.js
+  - tmp/cache.tmp
+
+--- a/.ghost-run-strategy
++++ b/.ghost-run-strategy
+@@ -0,0 +1 @@
++reflink
+
+--- a/CLEANUP_NOTES.md
++++ b/CLEANUP_NOTES.md
+@@ -0,0 +1,2 @@
++# Cleanup
++Removed unused legacy helpers and tmp cache.
+
+--- a/src/old_helper.js
++++ b/src/old_helper.js
+@@ -1,2 +0,0 @@
+-/* UNUSED — superseded helper, nothing imports this. */
+-export function pad(n) { return String(n).padStart(2, '0'); }
+
+--- a/src/unused_legacy.js
++++ b/src/unused_legacy.js
+@@ -1,4 +0,0 @@
+-/* UNUSED — old experiment, not referenced by index.html. Safe to delete. */
+-export function legacyGreeter(name) {
+-  return 'hello ' + name;
+-}
+
+--- a/tmp/cache.tmp
++++ b/tmp/cache.tmp
+@@ -1 +0,0 @@
+-stale cache blob — should be deleted
+
+HTML report: /tmp/ghost-run-ka2mc8b1-ghost-demo-vZZck3/ghost-run-diff.html
+
+Beat 5: ghost ui + screenshot -> /workspace/ghost-run/demo/pane.png
+UI up on http://127.0.0.1:8765/ (pid 3048291)
+{
+  "ok": true,
+  "service": "ghost-run-ui"
+}
+playwright screenshot -> /workspace/ghost-run/demo/pane.png (49527 bytes)
+SCREENSHOT_OK /workspace/ghost-run/demo/pane.png
+Beat 6: apply selected (3 deletions) via UI API
+{
+  "ok": true,
+  "actions": [
+    "deleted \u2192 removed src/old_helper.js",
+    "deleted \u2192 removed src/unused_legacy.js",
+    "deleted \u2192 removed tmp/cache.tmp"
+  ]
+}
+real src/unused_legacy.js exists=False
+real src/old_helper.js exists=False
+real tmp/cache.tmp exists=False
+apply-3 OK: deletions on real, notes still ghost-only
+Beat 7: discard remaining
+{
+  "ok": true,
+  "message": "ghost-run: discarded sandbox /tmp/ghost-run-ka2mc8b1-ghost-demo-vZZck3"
+}
+after discard enabled= False ghost= None
+Beat 8: CoW / hardlink timing on ~5k-file tree
+{
+  "auto": {
+    "seconds": 0.1168,
+    "used": "reflink",
+    "files_in_ghost": 5000
+  },
+  "hardlink": {
+    "seconds": 0.0462,
+    "used": "hardlink",
+    "files_in_ghost": 5000
+  },
+  "hardlink-file": {
+    "seconds": 0.0922,
+    "used": "hardlink-file",
+    "files_in_ghost": 5000
+  },
+  "copy": {
+    "seconds": 0.2565,
+    "used": "copy",
+    "files_in_ghost": 5000
+  },
+  "reflink": {
+    "seconds": 0.0891,
+    "used": "reflink",
+    "files_in_ghost": 5000
+  }
+}
+Wrote /workspace/ghost-run/demo/copy-timing.json
+
+DEMO COMPLETE
