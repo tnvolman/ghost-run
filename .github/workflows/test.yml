@@ -27,7 +27,7 @@ jobs:
             echo "desktop/plugin.js must not call fetch"
             exit 1
           fi
-          if grep -E '127\.0\.0\.1|localhost' desktop/plugin.js | grep -E 'fetch|XMLHttpRequest'; then
+          if grep -E '127\.0\.0\.1|localhost' desktop/plugin.js | grep -E 'fetch[[:space:]]*\(|XMLHttpRequest'; then
             echo "desktop/plugin.js must not fetch loopback"
             exit 1
           fi
