@@ -7,6 +7,10 @@
 # restore. Apply still runs — Verify is advisory. Stdlib fixture command only.
 set -euo pipefail
 
+if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  python() { python3 "$@"; }
+fi
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
 FIX="$DEMO_DIR/fixture"
@@ -147,11 +151,16 @@ if not ok:
     chrome = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
     if chrome:
         cwd = out.parent
-        subprocess.run(
-            [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
-             f"--screenshot={out.name}", "--window-size=1280,800", url],
-            check=False, capture_output=True, timeout=45, cwd=str(cwd),
-        )
+        try:
+            subprocess.run(
+                [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
+                 "--disable-dev-shm-usage", "--virtual-time-budget=4000",
+                 f"--screenshot={out.name}", "--window-size=1280,800", url],
+                check=False, capture_output=True, timeout=20, cwd=str(cwd),
+            )
+        except subprocess.TimeoutExpired:
+            # Do not print the command: the page URL carries the session token.
+            print("chromium CLI screenshot timed out")
         if not out.is_file():
             cand = cwd / "screenshot.png"
             if cand.is_file():
@@ -175,9 +184,9 @@ echo "$UI_PORT" > "$DEMO_DIR/.ui.port"
 UI_TOKEN=""
 for i in $(seq 1 40); do
   if [[ -s "$UI_LOG" ]]; then
-    UI_TOKEN=$(sed -n 's/.*[?&]token=\([^[:space:]]*\).*/\1/p' "$UI_LOG" | head -1)
+    UI_TOKEN=$(sed -n 's/.*[#]token=\([^[:space:]]\{1,\}\).*/\1/p' "$UI_LOG" | head -1)
   fi
-  if [[ -n "$UI_TOKEN" ]] && curl -fsS "http://127.0.0.1:$UI_PORT/api/health?token=${UI_TOKEN}" >/dev/null 2>&1; then
+  if [[ -n "$UI_TOKEN" ]] && curl -fsS -H "X-Ghost-Run-Token: ${UI_TOKEN}" "http://127.0.0.1:$UI_PORT/api/health" >/dev/null 2>&1; then
     echo "UI up on http://127.0.0.1:$UI_PORT/ (token redacted, pid $UI_PID)" | tee -a "$LOG"
     break
   fi
@@ -188,11 +197,11 @@ if [[ -z "${UI_TOKEN}" ]]; then
   exit 1
 fi
 export UI_TOKEN
-curl -fsS "http://127.0.0.1:$UI_PORT/api/health?token=${UI_TOKEN}" | tee -a "$LOG"
+curl -fsS -H "X-Ghost-Run-Token: ${UI_TOKEN}" "http://127.0.0.1:$UI_PORT/api/health" | tee -a "$LOG"
 echo | tee -a "$LOG"
 
 export PANE_PNG
-export PANE_URL="http://127.0.0.1:$UI_PORT/?token=${UI_TOKEN}"
+export PANE_URL="http://127.0.0.1:$UI_PORT/#token=${UI_TOKEN}"
 capture_pane | tee -a "$LOG"
 
 # README manual beat 5. Same path as `/ghost verify` / `hermes ghost verify`:
@@ -221,7 +230,7 @@ assert "fixture healthy" in (passed.get("log") or "")
 print("VERIFY_PASS")
 PY
 echo "GET /api/verify after Pass" | tee -a "$LOG"
-curl -fsS "http://127.0.0.1:$UI_PORT/api/verify?token=${UI_TOKEN}" | tee -a "$LOG"
+curl -fsS -H "X-Ghost-Run-Token: ${UI_TOKEN}" "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
 echo | tee -a "$LOG"
 echo "recapture pane.png with Verify Pass banner" | tee -a "$LOG"
 export PANE_WAIT_SELECTOR="#verifyBanner.pass"
@@ -259,7 +268,7 @@ assert get_state().last_verify["status"] == "fail"
 print("restored ghost index.html; Apply still allowed after Fail")
 PY
 echo "GET /api/verify after Fail" | tee -a "$LOG"
-curl -fsS "http://127.0.0.1:$UI_PORT/api/verify?token=${UI_TOKEN}" | tee -a "$LOG"
+curl -fsS -H "X-Ghost-Run-Token: ${UI_TOKEN}" "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
 echo | tee -a "$LOG"
 
 echo "Beat 7: apply selected (3 deletions) via UI API after Verify Fail" | tee -a "$LOG"
@@ -272,9 +281,12 @@ assert verify.get("advisory") is True
 print("apply after Verify Fail (advisory; Apply stays available)")
 paths = ["src/unused_legacy.js", "src/old_helper.js", "tmp/cache.tmp"]
 req = urllib.request.Request(
-    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/apply?token={os.environ['UI_TOKEN']}",
+    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/apply",
     data=json.dumps({"paths": paths}).encode(),
-    headers={"Content-Type": "application/json"},
+    headers={
+        "Content-Type": "application/json",
+        "X-Ghost-Run-Token": os.environ["UI_TOKEN"],
+    },
     method="POST",
 )
 with urllib.request.urlopen(req, timeout=10) as resp:
@@ -294,9 +306,12 @@ echo "Beat 8: discard remaining" | tee -a "$LOG"
 python - <<'PY' | tee -a "$LOG"
 import os, urllib.request
 req = urllib.request.Request(
-    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/discard?token={os.environ['UI_TOKEN']}",
+    f"http://127.0.0.1:{os.environ.get('UI_PORT', '8765')}/api/discard",
     data=b"{}",
-    headers={"Content-Type": "application/json"},
+    headers={
+        "Content-Type": "application/json",
+        "X-Ghost-Run-Token": os.environ["UI_TOKEN"],
+    },
     method="POST",
 )
 with urllib.request.urlopen(req, timeout=10) as resp:

@@ -10,3 +10,4 @@ ui.port
 *.log
 pane.png
 *-sha.json
+verify-allow.json

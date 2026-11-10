@@ -485,3 +485,6 @@ def test_desktop_pane_opens_review_url_instead_of_fetching():
     assert "Access-Control-Allow-Origin" not in src
     assert "SandboxedFrame" not in src
     assert "ctx.openWorkspace" not in src
+    opener = src.split("const openReview", 1)[1].split("return _jsxs", 1)[0]
+    assert "err.message" not in opener
+    assert "Could not open the review page." in opener

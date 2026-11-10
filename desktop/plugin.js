@@ -57,8 +57,9 @@ function GhostPane({ openExternal }) {
       setStatus(ok === false
         ? 'The browser did not open. Open the printed URL yourself.'
         : 'Opened the review page in your browser. Load and Apply run there.')
-    } catch (err) {
-      setStatus(String(err && err.message ? err.message : err))
+    } catch (_err) {
+      // Never echo the thrown text. openExternal can include the fragment URL.
+      setStatus('Could not open the review page.')
     } finally {
       setBusy(false)
     }

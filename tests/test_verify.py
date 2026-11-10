@@ -338,6 +338,9 @@ def test_demo_script_verify_beat_is_advisory_and_before_apply():
     assert "demo-run.log" in script
     assert "npm install" not in script
     assert "node_modules" not in script.split("Beat 6")[1].split("Beat 7")[0]
+    assert "?token=" not in script
+    assert "#token=" in script
+    assert "X-Ghost-Run-Token" in script
 
 
 def test_desktop_pane_has_advisory_verify():
