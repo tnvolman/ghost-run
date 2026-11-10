@@ -4,8 +4,8 @@ requires_hermes: ">=0.21.7"
 description: >
   Dry-run mode for Hermes Agent. While Ghost Mode is on, file writes/edits/deletes
   and terminal tools are redirected into a throwaway copy of the working folder;
-  network-touching tools and commands are blocked. Review the diff, then apply
-  selected paths or discard. Optional thin Verify runs one configured test in
+  network-touching tools and commands are blocked.   Review the diff, then apply
+  selected paths or discard. The real folder changes only after a person presses Apply or runs `/ghost apply`. Optional thin Verify runs one configured test in
   the ghost copy only after you approve that project (advisory; Apply stays human).
   Opt-in outbound: set GHOST_RUN_AI=1 for advisory notes. Inside Hermes those
   notes use ctx.llm.complete (your provider; the plugin never sees the key).

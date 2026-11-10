@@ -31,7 +31,7 @@ Manual beats:
 3. Ask the agent: **"delete unused files"** (or have it `write_file` / `rm` via `terminal`).
 4. `hermes ghost ui` — interactive pane on `127.0.0.1`. The command prints `http://127.0.0.1:<port>/#token=<random>`. Open that exact URL. The page checks `Host` is `127.0.0.1:<port>` or `localhost:<port>`. The fragment is read once, removed from the address bar, and sent as `X-Ghost-Run-Token`. A query-string token is ignored and does not authenticate. The Desktop pane does not fetch this port. Paste the printed URL into it and it opens that page with `ctx.os.openExternal`.
 5. `hermes ghost verify` — or press **Verify**. The first run for a project asks you to approve the command (Hermes approval prompt, or a yes/no in the terminal). The demo fixture’s `.ghost-run-test` runs `python3 scripts/ghost_verify.py` in the ghost copy (no `node_modules`). **Pass** / **Fail** is evidence only.
-6. Apply selected paths — **or** Discard. A red Verify result does not disable Apply. Real disk stays untouched until Apply.
+6. Apply selected paths — **or** Discard. A red Verify result does not disable Apply. Real disk stays untouched until you press Apply or run `/ghost apply`.
 
 ## Install (dev)
 
@@ -102,7 +102,7 @@ The heuristics are deterministic and always on (`ghost_run/risk.py`):
 
 Blocked agent attempts (network tools, network shell commands, workdirs outside the folder) are logged to `blocked.jsonl` next to the session file and listed as high-risk flags.
 
-**Select only low-risk** checks only the changes the heuristics rated low. Nothing applies until you press **Apply selected**.
+**Select only low-risk** checks only the changes the heuristics rated low. Nothing applies until you press **Apply selected** or run `/ghost apply`.
 
 **Optional model notes (opt-in outbound):** set `GHOST_RUN_AI=1`. This is the only Ghost Run path that leaves the machine.
 
