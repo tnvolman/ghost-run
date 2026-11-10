@@ -1,0 +1,30 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Unit tests
+        run: python -m pytest --tb=line -p no:cacheprovider
+      - name: Local catalog validation
+        run: python scripts/validate_local.py
+      - name: Desktop pane does not fetch loopback
+        run: |
+          if grep -E 'fetch[[:space:]]*\(' desktop/plugin.js; then
+            echo "desktop/plugin.js must not call fetch"
+            exit 1
+          fi
+          if grep -E '127\.0\.0\.1|localhost' desktop/plugin.js | grep -E 'fetch|XMLHttpRequest'; then
+            echo "desktop/plugin.js must not fetch loopback"
+            exit 1
+          fi

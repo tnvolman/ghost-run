@@ -2,7 +2,7 @@
 
 **Dry-run mode for [Hermes Agent](https://hermes-agent.nousresearch.com).** While Ghost Mode is on, file writes/edits/deletes and terminal tools are redirected into a throwaway copy of your working folder. Network-touching tools and shell commands are blocked. Review the diff, then apply only the paths you want — or discard everything. Your real disk stays untouched until you say so.
 
-**Opt-in outbound.** With `GHOST_RUN_AI` unset, Ghost Run does not send file contents anywhere. Set `GHOST_RUN_AI=1` and advisory notes are requested. Inside Hermes they go through `ctx.llm.complete` (your current provider; the plugin never sees the key). Outside Hermes, the only credential read is `OPENROUTER_API_KEY`. The main model key is never sent. That upload is off unless you turn it on.
+**Opt-in outbound.** With `GHOST_RUN_AI` unset, Ghost Run does not send file contents anywhere. Set `GHOST_RUN_AI=1` and advisory notes are requested. Inside Hermes they go through `ctx.llm.complete` (your current provider; the plugin never sees the key). Otherwise the only read is `agent.secret_scope.get_secret("OPENROUTER_API_KEY")`. If that module is missing, notes stay off. The main model key is never sent.
 
 > Local scaffold for the Nous Research Hermes plugin hackathon (entries due **Wed Nov 11, 2026, 5:00 PM America/New_York**). This repo is **local-only** until Michael says yes to publish.
 
@@ -11,20 +11,25 @@
 Automated (deterministic) runner:
 
 ```bash
-# The agent beat uses OPENROUTER_API_KEY when it is already set (never printed).
-# Ghost Run does not copy the main model key into that variable.
+# Does not source ~/.hermes/.env and does not run a live agent.
+# Opt in with GHOST_RUN_AGENT=1 (and your own OPENROUTER_API_KEY).
+# GHOST_SKIP_AGENT=1 forces the agent beat off.
 ./demo/run_demo.sh
-# → demo/pane.png, demo/copy-timing.json, demo/demo-run.log
-# pane.png is recaptured after thin Verify Pass. The log also records Fail
-# (ghost index.html removed, then restored). Apply still runs after Fail.
+# Writes a temp work directory (printed at the end): demo-run.log,
+# pane.png, and copy-timing.json. The log records Verify Fail, then Apply.
 ```
+
+Committed review-page shots, from headless Chrome against the loopback page, not from Hermes Desktop:
+
+- [Load, diff list](demo/screenshots/review-page-load.png)
+- [After Apply](demo/screenshots/review-page-after-apply.png)
 
 Manual beats:
 
 1. `cd` into `demo/fixture` (small web project with obvious unused files).
 2. `/ghost on` — Hermes copies the tree into a temp sandbox (copy-on-write reflink when the filesystem supports it, otherwise a real copy; never a hard link). Skips `.git`, `node_modules`, venvs, build dirs; configurable via `.ghost-runignore` / `GHOST_RUN_IGNORE`.
 3. Ask the agent: **"delete unused files"** (or have it `write_file` / `rm` via `terminal`).
-4. `hermes ghost ui` — interactive pane on `127.0.0.1`. The command prints `http://127.0.0.1:<port>/#token=<random>`. Open that exact URL. The page checks `Host` is `127.0.0.1:<port>` or `localhost:<port>`. The fragment is read once, removed from the address bar, and sent as `X-Ghost-Run-Token`. A `?token=` query is ignored. The Desktop pane does not fetch this port. Paste the printed URL into it and it opens that page with `ctx.os.openExternal`.
+4. `hermes ghost ui` — interactive pane on `127.0.0.1`. The command prints `http://127.0.0.1:<port>/#token=<random>`. Open that exact URL. The page checks `Host` is `127.0.0.1:<port>` or `localhost:<port>`. The fragment is read once, removed from the address bar, and sent as `X-Ghost-Run-Token`. A token in the query string is rejected. The Desktop pane does not fetch this port. Paste the printed URL into it and it opens that page with `ctx.os.openExternal`.
 5. `hermes ghost verify` — or press **Verify**. The first run for a project asks you to approve the command (Hermes approval prompt, or a yes/no in the terminal). The demo fixture’s `.ghost-run-test` runs `python3 scripts/ghost_verify.py` in the ghost copy (no `node_modules`). **Pass** / **Fail** is evidence only.
 6. Apply selected paths — **or** Discard. A red Verify result does not disable Apply. Real disk stays untouched until Apply.
 
@@ -75,9 +80,11 @@ hermes ghost ui          # prints http://127.0.0.1:<port>/#token=<random>
 hermes ghost ui --open   # opens that exact URL
 ```
 
-The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). The printed URL carries the session token in the fragment (`#token=`), which the browser does not send. The page copies it into `X-Ghost-Run-Token` and strips the fragment with `history.replaceState`. A `?token=` query does not authenticate. Responses send no `Access-Control-Allow-Origin` header. The printed page is same-origin with the server, so a normal browser loads, reviews, and applies without one.
+The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). The printed URL carries the session token in the fragment (`#token=`), which the browser does not send. The page copies it into `X-Ghost-Run-Token` and strips the fragment with `history.replaceState`. A token in the query string is rejected. Responses send no `Access-Control-Allow-Origin` header. The printed page is same-origin with the server, so a normal browser loads, reviews, and applies without one.
 
-`desktop/plugin.js` is a thin pane. It calls `host.openWorkspace` when that function exists (`apps/desktop/src/sdk/index.ts` exports it on `host`), and otherwise `ctx.register({ area: 'panes' })`. The button calls `ctx.os.openExternal` with the pasted loopback URL. The pane does not fetch the review server. `SandboxedFrame` is not used: its sandbox is `allow-scripts` only, so the page inside it would run as an opaque origin and its own fetches would send `Origin: null`.
+`desktop/plugin.js` is a thin pane. It calls `host.openWorkspace` when that function exists (`apps/desktop/src/sdk/index.ts` exports it on `host`), and otherwise `ctx.register({ area: 'panes' })`. The button calls `ctx.os.openExternal` with the pasted loopback URL. The pane does not fetch the review server. The SDK sandboxed iframe is not used: its sandbox is scripts only, so the page inside it would run as an opaque origin and its own fetches would send `Origin: null`.
+
+A live Desktop click-through is in [docs/desktop-check.md](docs/desktop-check.md). It has not been run here.
 
 `hermes ghost diff` still writes a static `ghost-run-diff.html` snapshot.
 

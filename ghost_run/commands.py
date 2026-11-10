@@ -122,7 +122,7 @@ def slash_ghost(raw_args: str) -> str:
             "The command prints http://127.0.0.1:<port>/#token=<random>. "
             "Open that exact URL. The Host header must be 127.0.0.1:<port> "
             "or localhost:<port>. API calls send X-Ghost-Run-Token. "
-            "A ?token= query is ignored."
+            "A token in the query string is rejected."
         )
     return (
         "Usage: /ghost on|off|status|diff|verify|apply [paths...]|discard|ui\n"

@@ -19,7 +19,7 @@ hermes ghost ui
 
 That page is same-origin with the review server. Load and Apply run there.
 The server still requires a loopback `Host`. API calls send
-`X-Ghost-Run-Token`. A `?token=` query is ignored. The server sends no
+`X-Ghost-Run-Token`. A token in the query string is rejected. The server sends no
 `Access-Control-Allow-Origin` header.
 
 The SDK sandboxed iframe (`apps/desktop/src/components/ui/sandboxed-frame.tsx`)

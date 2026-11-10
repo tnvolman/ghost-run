@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Ghost Run — deterministic ~90s demo runner (local only).
-# The optional agent beat uses OPENROUTER_API_KEY when it is already set.
-# Ghost Run does not copy the main model key into that variable and never prints a key.
+# Ghost Run — deterministic demo runner (local only).
+# The live-agent beat is off unless GHOST_RUN_AGENT=1. It is never started
+# from a sourced ~/.hermes/.env. GHOST_SKIP_AGENT=1 forces it off.
+# Ghost Run does not copy the main model key and never prints a key.
 # Thin Verify (README beat 5) runs between the pane screenshot and Apply:
 # Pass on the healthy fixture, Fail after deleting ghost index.html, then
 # restore. Apply still runs — Verify is advisory. Stdlib fixture command only.
@@ -11,32 +12,46 @@ if ! command -v python >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; th
   python() { python3 "$@"; }
 fi
 
+# Header file so the session token is not a curl argv entry. Mode 600, removed
+# before the function returns. The headless Chrome fallback still receives the
+# page URL, fragment included, because the browser has to open that URL.
+ui_curl() {
+  local hdr rc
+  hdr="$(mktemp)"
+  chmod 600 "$hdr"
+  printf 'X-Ghost-Run-Token: %s\n' "$UI_TOKEN" >"$hdr"
+  set +e
+  curl -fsS -H @"$hdr" "$@"
+  rc=$?
+  set -e
+  rm -f "$hdr"
+  return "$rc"
+}
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
 FIX="$DEMO_DIR/fixture"
 WORK="$(mktemp -d /tmp/ghost-demo-XXXXXX)"
-SESSION="$DEMO_DIR/.demo-session.json"
+SESSION="$WORK/session.json"
 UI_PORT="${GHOST_UI_PORT:-8765}"
 export UI_PORT
-LOG="$DEMO_DIR/demo-run.log"
-PANE_PNG="$DEMO_DIR/pane.png"
-TIMING_JSON="$DEMO_DIR/copy-timing.json"
+LOG="$WORK/demo-run.log"
+PANE_PNG="$WORK/pane.png"
+TIMING_JSON="$WORK/copy-timing.json"
 
-if [[ -f "$HOME/.hermes/.env" ]]; then
+# Opt in to read ~/.hermes/.env. Off by default so a developer key file
+# cannot change this run.
+if [[ "${GHOST_DEMO_SOURCE_HERMES_ENV:-}" == "1" && -f "${HOME}/.hermes/.env" ]]; then
   set -a
   # shellcheck disable=SC1090
-  source "$HOME/.hermes/.env"
+  source "${HOME}/.hermes/.env"
   set +a
 fi
 
-# Do not copy a main-model credential into OPENROUTER_API_KEY. The agent beat
-# runs only when that OpenRouter key is already set. The rest of the demo
-# does not need it.
-
-VENV="${GHOST_VENV:-/workspace/.venv-hermes}"
-if [[ -x "$VENV/bin/python" ]]; then
+# Opt in to a virtualenv. There is no default path.
+if [[ -n "${GHOST_VENV:-}" && -x "${GHOST_VENV}/bin/python" ]]; then
   # shellcheck disable=SC1091
-  source "$VENV/bin/activate"
+  source "${GHOST_VENV}/bin/activate"
 fi
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export GHOST_RUN_SESSION_FILE="$SESSION"
@@ -69,11 +84,18 @@ python -c 'from ghost_run.commands import turn_on; from pathlib import Path; pri
 
 PROMPT='You are cleaning a tiny web project. Delete ONLY these unused files if they exist: src/unused_legacy.js, src/old_helper.js, tmp/cache.tmp. Do not modify index.html, src/app.js, public/styles.css, package.json, or README.md. Use delete/remove tools or terminal rm. Be brief.'
 
-echo "Beat 3: agent cleanup via openrouter/free (key not printed)" | tee -a "$LOG"
+echo "Beat 3: optional live agent (off unless GHOST_RUN_AGENT=1)" | tee -a "$LOG"
+echo "hermes-env-marker=${GHOST_DEMO_MARKER:-unset}" | tee -a "$LOG"
 set +e
-if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
-  echo "agent beat skipped: OPENROUTER_API_KEY is not set (main model key is not forwarded)" | tee -a "$LOG"
-elif command -v hermes >/dev/null 2>&1; then
+if [[ "${GHOST_SKIP_AGENT:-}" == "1" ]]; then
+  echo "agent beat skipped: GHOST_SKIP_AGENT=1" | tee -a "$LOG"
+elif [[ "${GHOST_RUN_AGENT:-}" != "1" ]]; then
+  echo "agent beat skipped: set GHOST_RUN_AGENT=1 to opt in" | tee -a "$LOG"
+elif [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+  echo "agent beat skipped: OPENROUTER_API_KEY is not set" | tee -a "$LOG"
+elif ! command -v hermes >/dev/null 2>&1; then
+  echo "agent beat skipped: hermes is not on PATH" | tee -a "$LOG"
+else
   timeout 90 hermes chat --provider openrouter --model openrouter/free -q "$PROMPT" >>"$LOG" 2>&1
 fi
 set -e
@@ -186,7 +208,7 @@ for i in $(seq 1 40); do
   if [[ -s "$UI_LOG" ]]; then
     UI_TOKEN=$(sed -n 's/.*[#]token=\([^[:space:]]\{1,\}\).*/\1/p' "$UI_LOG" | head -1)
   fi
-  if [[ -n "$UI_TOKEN" ]] && curl -fsS -H "X-Ghost-Run-Token: ${UI_TOKEN}" "http://127.0.0.1:$UI_PORT/api/health" >/dev/null 2>&1; then
+  if [[ -n "$UI_TOKEN" ]] && ui_curl "http://127.0.0.1:$UI_PORT/api/health" >/dev/null 2>&1; then
     echo "UI up on http://127.0.0.1:$UI_PORT/ (token redacted, pid $UI_PID)" | tee -a "$LOG"
     break
   fi
@@ -197,12 +219,16 @@ if [[ -z "${UI_TOKEN}" ]]; then
   exit 1
 fi
 export UI_TOKEN
-curl -fsS -H "X-Ghost-Run-Token: ${UI_TOKEN}" "http://127.0.0.1:$UI_PORT/api/health" | tee -a "$LOG"
+ui_curl "http://127.0.0.1:$UI_PORT/api/health" | tee -a "$LOG"
 echo | tee -a "$LOG"
 
 export PANE_PNG
 export PANE_URL="http://127.0.0.1:$UI_PORT/#token=${UI_TOKEN}"
-capture_pane | tee -a "$LOG"
+if [[ "${GHOST_DEMO_SKIP_SCREENSHOT:-}" == "1" ]]; then
+  echo "screenshot skipped" | tee -a "$LOG"
+else
+  capture_pane | tee -a "$LOG"
+fi
 
 # README manual beat 5. Same path as `/ghost verify` / `hermes ghost verify`:
 # slash_ghost("verify") -> run_verify. Fixture `.ghost-run-test` is stdlib-only
@@ -230,12 +256,16 @@ assert "fixture healthy" in (passed.get("log") or "")
 print("VERIFY_PASS")
 PY
 echo "GET /api/verify after Pass" | tee -a "$LOG"
-curl -fsS -H "X-Ghost-Run-Token: ${UI_TOKEN}" "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
+ui_curl "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
 echo | tee -a "$LOG"
 echo "recapture pane.png with Verify Pass banner" | tee -a "$LOG"
-export PANE_WAIT_SELECTOR="#verifyBanner.pass"
-capture_pane | tee -a "$LOG"
-unset PANE_WAIT_SELECTOR
+if [[ "${GHOST_DEMO_SKIP_SCREENSHOT:-}" == "1" ]]; then
+  echo "screenshot skipped" | tee -a "$LOG"
+else
+  export PANE_WAIT_SELECTOR="#verifyBanner.pass"
+  capture_pane | tee -a "$LOG"
+  unset PANE_WAIT_SELECTOR
+fi
 
 echo "Beat 6b: break ghost index.html, expect Fail, restore (Apply stays allowed)" | tee -a "$LOG"
 python - <<'PY' | tee -a "$LOG"
@@ -268,7 +298,7 @@ assert get_state().last_verify["status"] == "fail"
 print("restored ghost index.html; Apply still allowed after Fail")
 PY
 echo "GET /api/verify after Fail" | tee -a "$LOG"
-curl -fsS -H "X-Ghost-Run-Token: ${UI_TOKEN}" "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
+ui_curl "http://127.0.0.1:$UI_PORT/api/verify" | tee -a "$LOG"
 echo | tee -a "$LOG"
 
 echo "Beat 7: apply selected (3 deletions) via UI API after Verify Fail" | tee -a "$LOG"
