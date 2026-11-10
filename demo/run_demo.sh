@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ghost Run — deterministic ~90s demo runner (local only).
-# Uses openrouter/free via HERMES_MODEL_API_KEY / OPENROUTER_API_KEY.
-# Never prints the API key.
+# The optional agent beat uses OPENROUTER_API_KEY when it is already set.
+# Ghost Run does not copy the main model key into that variable and never prints a key.
 # Thin Verify (README beat 5) runs between the pane screenshot and Apply:
 # Pass on the healthy fixture, Fail after deleting ghost index.html, then
 # restore. Apply still runs — Verify is advisory. Stdlib fixture command only.
@@ -25,19 +25,9 @@ if [[ -f "$HOME/.hermes/.env" ]]; then
   set +a
 fi
 
-if [[ -z "${OPENROUTER_API_KEY:-${HERMES_MODEL_API_KEY:-}}" ]]; then
-  echo "ERROR: set HERMES_MODEL_API_KEY or OPENROUTER_API_KEY (never print it)" >&2
-  exit 1
-fi
-if [[ -z "${OPENROUTER_API_KEY:-}" && -n "${HERMES_MODEL_API_KEY:-}" ]]; then
-  export OPENROUTER_API_KEY="$HERMES_MODEL_API_KEY"
-fi
-export OPENROUTER_API_KEY
-if [[ -d "$HOME/.hermes" ]]; then
-  if ! grep -q '^OPENROUTER_API_KEY=' "$HOME/.hermes/.env" 2>/dev/null; then
-    printf 'OPENROUTER_API_KEY=%s\n' "$OPENROUTER_API_KEY" >> "$HOME/.hermes/.env"
-  fi
-fi
+# Do not copy a main-model credential into OPENROUTER_API_KEY. The agent beat
+# runs only when that OpenRouter key is already set. The rest of the demo
+# does not need it.
 
 VENV="${GHOST_VENV:-/workspace/.venv-hermes}"
 if [[ -x "$VENV/bin/python" ]]; then
@@ -77,7 +67,9 @@ PROMPT='You are cleaning a tiny web project. Delete ONLY these unused files if t
 
 echo "Beat 3: agent cleanup via openrouter/free (key not printed)" | tee -a "$LOG"
 set +e
-if command -v hermes >/dev/null 2>&1; then
+if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+  echo "agent beat skipped: OPENROUTER_API_KEY is not set (main model key is not forwarded)" | tee -a "$LOG"
+elif command -v hermes >/dev/null 2>&1; then
   timeout 90 hermes chat --provider openrouter --model openrouter/free -q "$PROMPT" >>"$LOG" 2>&1
 fi
 set -e

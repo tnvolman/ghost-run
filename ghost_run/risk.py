@@ -1,10 +1,16 @@
 """AI risk flags for pending ghost changes.
 
 Deterministic heuristics first: every change gets ``level`` (low|med|high)
-and a one-line plain-English ``reason``. An optional model summary
-(``HERMES_MODEL_API_KEY``, ``openrouter/free``) may add an ``ai_note`` per file,
-but it never changes the level and never selects or applies anything.
-Any model timeout or error degrades silently to the heuristics.
+and a one-line plain-English ``reason``. An optional model summary may add
+an ``ai_note`` per file, but it never changes the level and never selects
+or applies anything. Any model timeout or error degrades silently to the
+heuristics.
+
+Opt-in with ``GHOST_RUN_AI=1``. Inside Hermes the notes go through
+``ctx.llm.complete`` so the host keeps the user's provider credentials.
+Outside Hermes, the only key read is ``OPENROUTER_API_KEY`` via
+``agent.secret_scope.get_secret`` (or that env var when Hermes is not
+installed). The main model credential is never read and never sent.
 """
 
 from __future__ import annotations
@@ -186,14 +192,88 @@ def summarize_counts(changes: List[Dict[str, Any]]) -> Dict[str, int]:
 _AI_CACHE: Dict[str, Dict[str, Any]] = {}
 DEFAULT_MODEL = "openrouter/free"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+_LLM_PURPOSE = "ghost-run.risk-notes"
+
+# Bound from register(ctx) when Hermes exposes ctx.llm.complete.
+_llm_complete: Optional[Any] = None
 
 
-def _api_key() -> Optional[str]:
-    return os.environ.get("HERMES_MODEL_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+def bind_llm_complete(complete: Any) -> None:
+    """Use the host LLM for advisory notes. The callable must not need a key."""
+    global _llm_complete
+    _llm_complete = complete
+
+
+def unbind_llm_complete() -> None:
+    global _llm_complete
+    _llm_complete = None
+
+
+def _ai_flag() -> bool:
+    return os.environ.get("GHOST_RUN_AI", "").lower() in ("1", "true", "yes")
+
+
+def _openrouter_api_key() -> Optional[str]:
+    """Return only the OpenRouter key. Never the main Hermes model key.
+
+    Hermes installs resolve the name through ``agent.secret_scope.get_secret``
+    so a multiplexed profile cannot borrow another profile's env. With no
+    Hermes install, the same name is read from the environment.
+    """
+    try:
+        from agent.secret_scope import UnscopedSecretError, get_secret
+    except ImportError:
+        value = os.environ.get("OPENROUTER_API_KEY")
+        return value.strip() if isinstance(value, str) and value.strip() else None
+    try:
+        value = get_secret("OPENROUTER_API_KEY")
+    except UnscopedSecretError:
+        return None
+    except Exception:
+        return None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
 
 
 def ai_enabled() -> bool:
-    return os.environ.get("GHOST_RUN_AI", "").lower() in ("1", "true", "yes") and bool(_api_key())
+    if not _ai_flag():
+        return False
+    if _llm_complete is not None:
+        return True
+    return bool(_openrouter_api_key())
+
+
+def _completion_text(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    text = getattr(result, "text", None)
+    if isinstance(text, str):
+        return text
+    if isinstance(result, dict):
+        raw = result.get("text")
+        if isinstance(raw, str):
+            return raw
+    raise TypeError("llm complete returned no text")
+
+
+def _call_llm(messages: List[Dict[str, str]], timeout: float) -> str:
+    complete = _llm_complete
+    if complete is None:
+        raise RuntimeError("no llm complete")
+    kwargs: Dict[str, Any] = {
+        "messages": messages,
+        "temperature": 0,
+        "timeout": timeout,
+        "purpose": _LLM_PURPOSE,
+    }
+    try:
+        result = complete(**kwargs)
+    except TypeError:
+        kwargs.pop("purpose", None)
+        result = complete(**kwargs)
+    return _completion_text(result)
 
 
 def _default_post(url: str, body: Dict[str, Any], headers: Dict[str, str], timeout: float) -> Dict[str, Any]:
@@ -230,17 +310,27 @@ def model_notes(
         "plain-English sentence on what could go wrong if applied. Reply with JSON only: "
         '{"summary": "<one sentence>", "notes": {"<path>": "<sentence>"}}.\n\n' + json.dumps(items)
     )
-    body = {
-        "model": os.environ.get("GHOST_RUN_MODEL", DEFAULT_MODEL),
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
-    }
-    headers = {"Content-Type": "application/json", "Authorization": "Bearer " + (_api_key() or "")}
+    messages = [{"role": "user", "content": prompt}]
     try:
-        data = (post or _default_post)(OPENROUTER_URL, body, headers, timeout)
-        text = data["choices"][0]["message"]["content"]
-        m = re.search(r"\{.*\}", text, re.S)
-        parsed = json.loads(m.group(0) if m else text)
+        if _llm_complete is not None and post is None:
+            text = _call_llm(messages, timeout)
+        else:
+            key = _openrouter_api_key()
+            if post is None and not key:
+                return {"status": "off", "notes": {}, "summary": ""}
+            body = {
+                "model": os.environ.get("GHOST_RUN_MODEL", DEFAULT_MODEL),
+                "messages": messages,
+                "temperature": 0,
+            }
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + (key or ""),
+            }
+            data = (post or _default_post)(OPENROUTER_URL, body, headers, timeout)
+            text = data["choices"][0]["message"]["content"]
+        match = re.search(r"\{.*\}", text, re.S)
+        parsed = json.loads(match.group(0) if match else text)
         notes = {
             str(k): str(v)[:240]
             for k, v in (parsed.get("notes") or {}).items()

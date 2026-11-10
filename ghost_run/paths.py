@@ -90,6 +90,11 @@ def remap_to_ghost(
 
     rel = resolved.relative_to(real_root.resolve())
     ghost_path = (ghost_root / rel).resolve()
+    if not is_within(ghost_path, ghost_root):
+        return None, (
+            f"ghost-run: blocked path outside ghost copy: {raw_path!r} "
+            f"(resolved {ghost_path}, ghost {ghost_root})"
+        )
     # Prefer absolute ghost path so Hermes file tools hit the sandbox regardless
     # of the process cwd.
     return str(ghost_path), None

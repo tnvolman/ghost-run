@@ -18,7 +18,7 @@ from ghost_run.hooks import on_pre_tool_call
 from ghost_run.middleware import on_tool_request
 from ghost_run.sandbox import create_ghost_copy, discard_ghost_copy
 from ghost_run.state import get_state, pop_pending_block, set_pending_block
-from ghost_run.ui_server import serve
+from ghost_run.ui_server import DESKTOP_RENDERER_ORIGIN, serve
 from ghost_run.verify import (
     NOT_APPROVED,
     prepare_verify_command,
@@ -347,3 +347,141 @@ def test_concurrent_tool_calls_keep_their_own_block(tmp_path: Path):
     for thread in threads:
         thread.join()
     assert results == {"one": "msg-one", "two": "msg-two"}
+
+
+def _raw(port: int, method: str, path: str, headers: dict, body: bytes = b""):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request(method, path, body=body, headers=headers)
+    resp = conn.getresponse()
+    payload = resp.read()
+    header_map = {key.lower(): value for key, value in resp.getheaders()}
+    conn.close()
+    return resp.status, header_map, payload
+
+
+def test_desktop_origin_cors_load_and_apply(tmp_path, monkeypatch):
+    """Simulate the Desktop renderer's Origin and run Load (GET diff) plus Apply."""
+    monkeypatch.setenv("GHOST_RUN_SESSION_FILE", str(tmp_path / "session.json"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "keep.txt").write_text("keep\n", encoding="utf-8")
+    turn_on(root)
+    state = get_state()
+    assert state.ghost_root is not None
+    (state.ghost_root / "keep.txt").write_text("ghost\n", encoding="utf-8")
+    httpd, port = serve(host="127.0.0.1", port=0, block=False)
+    token = httpd.ghost_token
+    origin = DESKTOP_RENDERER_ORIGIN
+    assert origin == "null"
+    try:
+        status, headers, payload = _raw(
+            port,
+            "GET",
+            f"/api/diff?token={token}",
+            {"Host": f"127.0.0.1:{port}", "Origin": origin},
+        )
+        assert status == 200
+        assert headers.get("access-control-allow-origin") == origin
+        assert "access-control-allow-credentials" not in headers
+        diff = json.loads(payload)
+        assert diff["ok"] is True
+        assert any(row["path"] == "keep.txt" for row in diff["changes"])
+
+        pre_status, pre_headers, _pre_body = _raw(
+            port,
+            "OPTIONS",
+            f"/api/apply?token={token}",
+            {
+                "Host": f"127.0.0.1:{port}",
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert pre_status == 204
+        assert pre_headers.get("access-control-allow-origin") == origin
+        assert "POST" in pre_headers.get("access-control-allow-methods", "")
+        assert "content-type" in pre_headers.get("access-control-allow-headers", "").lower()
+
+        denied, denied_headers, _denied_body = _raw(
+            port,
+            "OPTIONS",
+            "/api/apply",
+            {
+                "Host": f"127.0.0.1:{port}",
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert denied == 401
+
+        apply_body = json.dumps({"paths": ["keep.txt"]}).encode()
+        applied, apply_headers, apply_payload = _raw(
+            port,
+            "POST",
+            f"/api/apply?token={token}",
+            {
+                "Host": f"127.0.0.1:{port}",
+                "Origin": origin,
+                "Content-Type": "application/json",
+            },
+            apply_body,
+        )
+        assert applied == 200
+        assert apply_headers.get("access-control-allow-origin") == origin
+        assert json.loads(apply_payload)["ok"] is True
+        assert (root / "keep.txt").read_text(encoding="utf-8") == "ghost\n"
+
+        missing, _missing_headers, _missing_body = _raw(
+            port,
+            "POST",
+            "/api/apply",
+            {
+                "Host": f"127.0.0.1:{port}",
+                "Origin": origin,
+                "Content-Type": "application/json",
+            },
+            apply_body,
+        )
+        assert missing == 401
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_non_desktop_origins_get_no_cors_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("GHOST_RUN_SESSION_FILE", str(tmp_path / "session.json"))
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "keep.txt").write_text("keep\n", encoding="utf-8")
+    turn_on(root)
+    httpd, port = serve(host="127.0.0.1", port=0, block=False)
+    token = httpd.ghost_token
+    try:
+        for origin in ("https://evil.example", "http://127.0.0.1:47891", "file:///opt/hermes/index.html", "*"):
+            status, headers, _payload = _raw(
+                port,
+                "GET",
+                f"/api/health?token={token}",
+                {"Host": f"127.0.0.1:{port}", "Origin": origin},
+            )
+            assert status == 200
+            assert "access-control-allow-origin" not in headers
+            pre_status, pre_headers, _pre_body = _raw(
+                port,
+                "OPTIONS",
+                f"/api/apply?token={token}",
+                {
+                    "Host": f"127.0.0.1:{port}",
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "content-type",
+                },
+            )
+            assert pre_status == 204
+            assert "access-control-allow-origin" not in pre_headers
+            assert "access-control-allow-private-network" not in pre_headers
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

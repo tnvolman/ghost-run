@@ -12,7 +12,13 @@ Start with ``hermes ghost ui`` (or ``python -m ghost_run.ui_server``).
 The server binds to ``127.0.0.1`` only. Every request must send
 ``Host: 127.0.0.1:<port>`` or ``Host: localhost:<port>`` and the per-session
 token printed in the URL (``?token=`` or header ``X-Ghost-Run-Token``).
-There is no ``Access-Control-Allow-Origin`` header.
+
+Packaged Hermes Desktop loads its renderer from ``file://`` with web
+security left on, so Chromium sends that opaque origin as the literal
+``Origin: null`` header. Only that exact origin is echoed back in
+``Access-Control-Allow-Origin``. Every other origin, including ``*``,
+gets no CORS header. Same-origin calls from this server (no ``Origin``,
+or the page's own loopback origin) keep working without one.
 """
 
 from __future__ import annotations
@@ -37,6 +43,11 @@ DEFAULT_PORT = 8765
 # The socket still binds to 127.0.0.1. Other hosts are rejected.
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
 _TOKEN_PLACEHOLDER = "__GHOST_RUN_TOKEN__"
+# Exact serialized origin of the packaged Desktop renderer (file:// + webSecurity).
+# Do not widen this to "*" or to every file URL.
+DESKTOP_RENDERER_ORIGIN = "null"
+_CORS_ALLOW_METHODS = "GET, POST, OPTIONS"
+_CORS_ALLOW_HEADERS = "Content-Type, X-Ghost-Run-Token"
 
 
 def report_to_dict(report: DiffReport) -> Dict[str, Any]:
@@ -450,6 +461,15 @@ class GhostUIHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:  # quieter
         pass
 
+    def _request_origin(self) -> str:
+        return (self.headers.get("Origin") or "").strip()
+
+    def _desktop_cors_origin(self) -> Optional[str]:
+        """The one origin allowed to read this loopback API from another page."""
+        if self._request_origin() == DESKTOP_RENDERER_ORIGIN:
+            return DESKTOP_RENDERER_ORIGIN
+        return None
+
     def _send(self, code: int, body: bytes, content_type: str, *, close: bool = False) -> None:
         if close:
             self.close_connection = True
@@ -459,6 +479,14 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
+        allowed = self._desktop_cors_origin()
+        if allowed is not None:
+            self.send_header("Access-Control-Allow-Origin", allowed)
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", _CORS_ALLOW_METHODS)
+            self.send_header("Access-Control-Allow-Headers", _CORS_ALLOW_HEADERS)
+            # Chromium private-network preflight from the file renderer to loopback.
+            self.send_header("Access-Control-Allow-Private-Network", "true")
         if close:
             self.send_header("Connection", "close")
         self.end_headers()
@@ -513,8 +541,8 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         self._send(code, raw, "application/json; charset=utf-8", close=close)
 
     def do_OPTIONS(self) -> None:  # noqa: N802
-        # No CORS headers. Same-origin calls that already carry the token get
-        # an empty 204; everyone else is rejected like any other request.
+        # Preflight still needs the session token and a loopback Host.
+        # Access-Control-Allow-Origin is added only for the Desktop renderer.
         if self._unauthorized():
             return
         self._send(204, b"", "text/plain")
@@ -640,6 +668,11 @@ def serve(
     )
     print(
         "  Every request needs this token (?token= or header X-Ghost-Run-Token).",
+        flush=True,
+    )
+    print(
+        "  Cross-origin reads are allowed only from the Desktop file:// renderer "
+        "(Origin: null). Other origins get no CORS header.",
         flush=True,
     )
     print("  GET  /           interactive Verify / Apply / Discard pane", flush=True)

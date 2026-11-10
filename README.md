@@ -2,7 +2,7 @@
 
 **Dry-run mode for [Hermes Agent](https://hermes-agent.nousresearch.com).** While Ghost Mode is on, file writes/edits/deletes and terminal tools are redirected into a throwaway copy of your working folder. Network-touching tools and shell commands are blocked. Review the diff, then apply only the paths you want — or discard everything. Your real disk stays untouched until you say so.
 
-**Opt-in outbound.** With `GHOST_RUN_AI` unset, Ghost Run does not send file contents anywhere. Set `GHOST_RUN_AI=1` (and an API key) and pending diffs are posted to OpenRouter for advisory notes. That upload is off unless you turn it on.
+**Opt-in outbound.** With `GHOST_RUN_AI` unset, Ghost Run does not send file contents anywhere. Set `GHOST_RUN_AI=1` and advisory notes are requested. Inside Hermes they go through `ctx.llm.complete` (your current provider; the plugin never sees the key). Outside Hermes, the only credential read is `OPENROUTER_API_KEY`. The main model key is never sent. That upload is off unless you turn it on.
 
 > Local scaffold for the Nous Research Hermes plugin hackathon (entries due **Wed Nov 11, 2026, 5:00 PM America/New_York**). This repo is **local-only** until Michael says yes to publish.
 
@@ -11,7 +11,8 @@
 Automated (deterministic) runner:
 
 ```bash
-# HERMES_MODEL_API_KEY or OPENROUTER_API_KEY must be set (never printed)
+# The agent beat uses OPENROUTER_API_KEY when it is already set (never printed).
+# Ghost Run does not copy the main model key into that variable.
 ./demo/run_demo.sh
 # → demo/pane.png, demo/copy-timing.json, demo/demo-run.log
 # pane.png is recaptured after thin Verify Pass. The log also records Fail
@@ -51,10 +52,11 @@ Public `PluginContext` only — **no core overrides**:
 
 | API | Kind | Purpose |
 |-----|------|---------|
-| `ctx.register_middleware("tool_request", ...)` | middleware | Remap `write_file` / `patch` / `read_file` / `search_files` `path` and `terminal` `workdir`/`command` paths into the ghost copy. Return `{"args": ...}`. |
+| `ctx.register_middleware("tool_request", ...)` | middleware | Remap `write_file` / `patch` / `read_file` / `search_files` `path`, every V4A `patch(mode="patch")` header (`Update` / `Add` / `Delete` / both ends of `Move File`), and `terminal` `workdir`/`command` paths into the ghost copy. Return `{"args": ...}`. A header that leaves the project blocks the call. |
 | `ctx.register_hook("pre_tool_call", ...)` | hook | Block with `{"action":"block","message":...}` for network tools (`web_search`, `web_extract`, `browser_*`, …), network shell (`curl`, `wget`, `ssh`, …), and paths outside the working folder. |
 | `ctx.register_command("ghost", ...)` | slash | `/ghost on\|off\|status\|…` |
 | `ctx.register_cli_command("ghost", ...)` | CLI | `hermes ghost diff\|apply\|discard` |
+| `ctx.llm.complete(...)` | host LLM | Advisory risk notes when `GHOST_RUN_AI=1`. Uses the user's Hermes provider. The plugin does not read or forward provider keys. |
 
 Target built-in tools (Hermes 0.19+): `write_file`, `patch`, `read_file`, `search_files`, `terminal`, `process_manage`.
 
@@ -73,7 +75,9 @@ hermes ghost ui          # prints http://127.0.0.1:<port>/?token=<random>
 hermes ghost ui --open   # opens that exact URL
 ```
 
-The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). Each request must send `Host: 127.0.0.1:<port>` or `Host: localhost:<port>` and the session token from the printed URL (`?token=` or the `X-Ghost-Run-Token` header). Responses do not send `Access-Control-Allow-Origin`. Paste the printed URL, token included, into the Desktop pane’s API base if you use that pane.
+The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). Each request must send `Host: 127.0.0.1:<port>` or `Host: localhost:<port>` and the session token from the printed URL (`?token=` or the `X-Ghost-Run-Token` header). Paste that full URL into the Desktop pane’s API base.
+
+Packaged Hermes Desktop loads the renderer from `file://` with web security on, so the pane’s `fetch` is cross-origin and Chromium sends `Origin: null`. The UI echoes `Access-Control-Allow-Origin: null` only for that exact origin (preflight included) and sends no CORS header for any other origin. The token and Host checks still apply. Opening the printed URL in a normal browser is same-origin and does not need that header.
 
 `hermes ghost diff` still writes a static `ghost-run-diff.html` snapshot.
 
@@ -93,7 +97,12 @@ Blocked agent attempts (network tools, network shell commands, workdirs outside 
 
 **Select only low-risk** checks only the changes the heuristics rated low. Nothing applies until you press **Apply selected**.
 
-**Optional model notes (opt-in outbound):** set `GHOST_RUN_AI=1` together with `HERMES_MODEL_API_KEY` (or `OPENROUTER_API_KEY`). This is the only Ghost Run path that leaves the machine: `ghost_run/risk.py` POSTs the pending diffs to OpenRouter (`https://openrouter.ai/api/v1/chat/completions`, model `openrouter/free`, override with `GHOST_RUN_MODEL`) for one sentence per file plus an overall summary, and caches the answer by diff. Leave `GHOST_RUN_AI` unset and nothing is uploaded. The model only adds advisory text. It never changes a risk level, selects a file, or applies anything. On a timeout (8 s), an HTTP error, or bad JSON, the pane quietly falls back to the heuristic flags. The key is sent only in the Authorization header and is never logged or printed.
+**Optional model notes (opt-in outbound):** set `GHOST_RUN_AI=1`. This is the only Ghost Run path that leaves the machine.
+
+- Inside Hermes, `register(ctx)` binds `ctx.llm.complete`. Notes use that call (purpose `ghost-run.risk-notes`) and the provider you already configured. The plugin does not read a provider key, does not choose a provider or model, and does not send the main model key anywhere.
+- Outside Hermes (no `ctx.llm`), notes POST pending diffs to OpenRouter (`https://openrouter.ai/api/v1/chat/completions`, model `openrouter/free`, override with `GHOST_RUN_MODEL`). The only credential read is `OPENROUTER_API_KEY`, through `agent.secret_scope.get_secret` when Hermes is installed, or from that environment variable when it is not. A multiplexed gateway with no secret scope fails closed. The main model key is not a fallback.
+
+The answer is cached by diff. Leave `GHOST_RUN_AI` unset and nothing is uploaded. The model only adds advisory text. It never changes a risk level, selects a file, or applies anything. On a timeout (8 s), an HTTP error, or bad JSON, the pane quietly falls back to the heuristic flags. A key used on the OpenRouter fallback is sent only in the Authorization header and is never logged or printed.
 
 ## Verify (advisory)
 
@@ -107,7 +116,7 @@ Command resolution, in order:
 
 The command string is read from the environment or the real tree, then executed with **cwd = the ghost sandbox** (90s timeout, stdout/stderr capped at 12 KiB). An agent edit of `.ghost-run-test` inside the ghost copy does not change which command runs. The process itself sees ghost files, so a check script in the sandbox is what actually runs. There is no auto-discovery of pytest or npm, and Ghost Run does not install dependencies for you.
 
-**Approval, once per project and command.** Verify does not run a repo-chosen command until you approve that exact command for that project. The ask goes through Hermes' approval prompt when Hermes is installed (`once` runs this time, `session` remembers for this process, `always` is saved). Otherwise a terminal yes/no is used when stdin is a TTY; a yes is saved. Non-interactive runs with no saved approval fail closed and do not start the command. Saved approvals live in `verify-allow.json` next to the session file (`~/.hermes/ghost-run/` unless `GHOST_RUN_SESSION_FILE` / `HERMES_HOME` says otherwise), outside the project, so a repo cannot approve itself. A changed command asks again.
+**Approval, once per project and command.** Verify does not run a repo-chosen command until you approve that exact command for that project. The ask goes through Hermes' approval prompt when Hermes is installed (`once` runs this time, `session` remembers for this process, `always` is saved). Otherwise a terminal yes/no is used when stdin is a TTY; a yes is saved. Non-interactive runs with no saved approval fail closed and do not start the command. Saved approvals live in `verify-allow.json` next to the session file. That directory is under `hermes_constants.get_hermes_home()` (context-local profile, then `HERMES_HOME`, then the platform default). If that module cannot be imported, Ghost Run uses `HERMES_HOME` or `~/.hermes`. `GHOST_RUN_SESSION_FILE` still overrides the session file itself. The approval file stays outside the project, so a repo cannot approve itself. A changed command asks again.
 
 The child process does not inherit provider API keys or other secrets. It receives a short allowlist (PATH, HOME, USER, locale, temp, and the usual Python/Node interpreter variables). Names that look like keys, tokens, or passwords are removed. Simple commands run without a shell; a command that uses pipes or redirects still uses a shell, and only after the same approval.
 

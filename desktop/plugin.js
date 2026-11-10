@@ -10,6 +10,8 @@
  *   - Verify (advisory Pass/Fail) / Apply selected / Discard wired to the local ghost UI API
  *     (hermes ghost ui → http://127.0.0.1:<port>/?token=<random>)
  *     Set the API base to that full URL. Host must be 127.0.0.1 or localhost.
+ *     These fetches are cross-origin: packaged Desktop is a file:// renderer,
+ *     so the browser sends Origin: null. The UI allows only that origin.
  *
  * Imports are limited to `@hermes/plugin-sdk` and `react` (desktop surface lint).
  * If the Desktop app is unavailable, use `hermes ghost ui` for the same pane.

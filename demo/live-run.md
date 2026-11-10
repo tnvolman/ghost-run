@@ -7,6 +7,8 @@
 **Spend:** **$0** (free model route; pricing prompt=0 / completion=0)  
 **Secrets:** none in this file. `HERMES_MODEL_API_KEY` was confirmed set via `test -n` only.
 
+This write-up is a historical log. Current Ghost Run does not copy the main model key into `OPENROUTER_API_KEY`. Advisory notes use `ctx.llm.complete` inside Hermes, or only `OPENROUTER_API_KEY` outside it.
+
 ## Setup
 
 1. Confirmed `HERMES_MODEL_API_KEY` set (`echo set`).

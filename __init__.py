@@ -13,14 +13,27 @@ try:
     from .ghost_run.commands import handle_cli, setup_cli, slash_ghost
     from .ghost_run.hooks import on_pre_tool_call
     from .ghost_run.middleware import on_tool_request
+    from .ghost_run.risk import bind_llm_complete, unbind_llm_complete
 except ImportError:  # pragma: no cover - flat path / test import edge
     from ghost_run.commands import handle_cli, setup_cli, slash_ghost
     from ghost_run.hooks import on_pre_tool_call
     from ghost_run.middleware import on_tool_request
+    from ghost_run.risk import bind_llm_complete, unbind_llm_complete
+
+
+def _bind_host_llm(ctx) -> None:
+    """Route advisory notes through ctx.llm.complete when Hermes provides it."""
+    llm = getattr(ctx, "llm", None)
+    complete = getattr(llm, "complete", None) if llm is not None else None
+    if callable(complete):
+        bind_llm_complete(complete)
+    else:
+        unbind_llm_complete()
 
 
 def register(ctx) -> None:
     """Called by Hermes when the plugin loads."""
+    _bind_host_llm(ctx)
     ctx.register_middleware("tool_request", on_tool_request)
     ctx.register_hook("pre_tool_call", on_pre_tool_call)
     ctx.register_command(
