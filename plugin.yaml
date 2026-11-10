@@ -8,8 +8,9 @@ description: >
   the ghost copy only after you approve that project (advisory; Apply stays human).
   Opt-in outbound: set GHOST_RUN_AI=1 for advisory notes. Inside Hermes those
   notes use ctx.llm.complete (your provider; the plugin never sees the key).
-  Outside Hermes, only OPENROUTER_API_KEY is read via agent.secret_scope.
-  The main model key is never sent. Off by default; nothing is uploaded otherwise.
+  Outside that call, OPENROUTER_API_KEY is read only via agent.secret_scope.
+  If that module is missing, notes stay off. The main model key is never sent.
+  Off by default; nothing is uploaded otherwise.
   Slash: /ghost on|off|status.
   CLI: hermes ghost diff|verify|apply|discard|ui.
 author: "Michael McClanahan (@tnvolman)"

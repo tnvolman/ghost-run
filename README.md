@@ -24,7 +24,7 @@ Manual beats:
 1. `cd` into `demo/fixture` (small web project with obvious unused files).
 2. `/ghost on` — Hermes copies the tree into a temp sandbox (copy-on-write reflink when the filesystem supports it, otherwise a real copy; never a hard link). Skips `.git`, `node_modules`, venvs, build dirs; configurable via `.ghost-runignore` / `GHOST_RUN_IGNORE`.
 3. Ask the agent: **"delete unused files"** (or have it `write_file` / `rm` via `terminal`).
-4. `hermes ghost ui` — interactive pane on `127.0.0.1`. The command prints `http://127.0.0.1:<port>/?token=<random>`. Open that exact URL. The page checks `Host` is `127.0.0.1:<port>` or `localhost:<port>` and requires the token on every request. Desktop `desktop/plugin.js` registers the same pane via `ctx.openWorkspace` / `area: 'panes'` and must use that full URL, token included.
+4. `hermes ghost ui` — interactive pane on `127.0.0.1`. The command prints `http://127.0.0.1:<port>/#token=<random>`. Open that exact URL. The page checks `Host` is `127.0.0.1:<port>` or `localhost:<port>`. The fragment is read once, removed from the address bar, and sent as `X-Ghost-Run-Token`. A `?token=` query is ignored. The Desktop pane does not fetch this port. Paste the printed URL into it and it opens that page with `ctx.os.openExternal`.
 5. `hermes ghost verify` — or press **Verify**. The first run for a project asks you to approve the command (Hermes approval prompt, or a yes/no in the terminal). The demo fixture’s `.ghost-run-test` runs `python3 scripts/ghost_verify.py` in the ghost copy (no `node_modules`). **Pass** / **Fail** is evidence only.
 6. Apply selected paths — **or** Discard. A red Verify result does not disable Apply. Real disk stays untouched until Apply.
 
@@ -71,19 +71,19 @@ Target built-in tools (Hermes 0.19+): `write_file`, `patch`, `read_file`, `searc
 Because the Electron Desktop app may not run headless on the box, ship the same UX via:
 
 ```bash
-hermes ghost ui          # prints http://127.0.0.1:<port>/?token=<random>
+hermes ghost ui          # prints http://127.0.0.1:<port>/#token=<random>
 hermes ghost ui --open   # opens that exact URL
 ```
 
-The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). Each request must send `Host: 127.0.0.1:<port>` or `Host: localhost:<port>` and the session token from the printed URL (`?token=` or the `X-Ghost-Run-Token` header). Paste that full URL into the Desktop pane’s API base.
+The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). The printed URL carries the session token in the fragment (`#token=`), which the browser does not send. The page copies it into `X-Ghost-Run-Token` and strips the fragment with `history.replaceState`. A `?token=` query does not authenticate. Responses send no `Access-Control-Allow-Origin` header. The printed page is same-origin with the server, so a normal browser loads, reviews, and applies without one.
 
-Packaged Hermes Desktop loads the renderer from `file://` with web security on, so the pane’s `fetch` is cross-origin and Chromium sends `Origin: null`. The UI echoes `Access-Control-Allow-Origin: null` only for that exact origin (preflight included) and sends no CORS header for any other origin. The token and Host checks still apply. Opening the printed URL in a normal browser is same-origin and does not need that header.
+`desktop/plugin.js` is a thin pane. It calls `host.openWorkspace` when that function exists (`apps/desktop/src/sdk/index.ts` exports it on `host`), and otherwise `ctx.register({ area: 'panes' })`. The button calls `ctx.os.openExternal` with the pasted loopback URL. The pane does not fetch the review server. `SandboxedFrame` is not used: its sandbox is `allow-scripts` only, so the page inside it would run as an opaque origin and its own fetches would send `Origin: null`.
 
 `hermes ghost diff` still writes a static `ghost-run-diff.html` snapshot.
 
 ## AI risk flags
 
-Every pending ghost change gets a risk badge (**high**, **med**, or **low**) and a one-line reason in plain English. The list is sorted with the riskiest changes first, in both the Desktop pane and `hermes ghost ui`.
+Every pending ghost change gets a risk badge (**high**, **med**, or **low**) and a one-line reason in plain English. The list is sorted with the riskiest changes first on the `hermes ghost ui` page. The Desktop pane opens that page in the browser.
 
 The heuristics are deterministic and always on (`ghost_run/risk.py`):
 
@@ -100,7 +100,7 @@ Blocked agent attempts (network tools, network shell commands, workdirs outside 
 **Optional model notes (opt-in outbound):** set `GHOST_RUN_AI=1`. This is the only Ghost Run path that leaves the machine.
 
 - Inside Hermes, `register(ctx)` binds `ctx.llm.complete`. Notes use that call (purpose `ghost-run.risk-notes`) and the provider you already configured. The plugin does not read a provider key, does not choose a provider or model, and does not send the main model key anywhere.
-- Outside Hermes (no `ctx.llm`), notes POST pending diffs to OpenRouter (`https://openrouter.ai/api/v1/chat/completions`, model `openrouter/free`, override with `GHOST_RUN_MODEL`). The only credential read is `OPENROUTER_API_KEY`, through `agent.secret_scope.get_secret` when Hermes is installed, or from that environment variable when it is not. A multiplexed gateway with no secret scope fails closed. The main model key is not a fallback.
+- Outside that call, notes POST pending diffs to OpenRouter (`https://openrouter.ai/api/v1/chat/completions`, model `openrouter/free`, override with `GHOST_RUN_MODEL`) only when `agent.secret_scope.get_secret` returns `OPENROUTER_API_KEY`. If that module cannot be imported, notes stay off. A multiplexed gateway with no secret scope fails closed. The process environment is not a fallback, and the main model key is never read.
 
 The answer is cached by diff. Leave `GHOST_RUN_AI` unset and nothing is uploaded. The model only adds advisory text. It never changes a risk level, selects a file, or applies anything. On a timeout (8 s), an HTTP error, or bad JSON, the pane quietly falls back to the heuristic flags. A key used on the OpenRouter fallback is sent only in the Authorization header and is never logged or printed.
 

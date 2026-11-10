@@ -78,27 +78,22 @@ def test_model_off_without_openrouter_key(monkeypatch):
     assert risk.model_notes([])["status"] == "off"
 
 
-def test_model_notes_never_send_the_main_model_key(monkeypatch):
+def test_env_openrouter_key_is_not_used_without_secret_scope(monkeypatch):
     monkeypatch.setenv("HERMES_MODEL_API_KEY", "sk-hermes-secret")
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
     monkeypatch.setenv("GHOST_RUN_AI", "1")
+    import sys
+
+    monkeypatch.setitem(sys.modules, "agent.secret_scope", None)
     risk.unbind_llm_complete()
-    seen = {}
 
-    def fake_post(url, body, headers, timeout):
-        seen["url"] = url
-        seen["headers"] = dict(headers)
-        seen["body"] = body
-        content = json.dumps({"summary": "s", "notes": {"a.md": "fine"}})
-        return {"choices": [{"message": {"content": content}}]}
+    def boom(*args, **kwargs):
+        raise AssertionError("openrouter must not be called")
 
-    changes = risk.annotate([ch("a.md", "added")])
-    res = risk.model_notes(changes, post=fake_post)
-    blob = json.dumps(seen)
-    assert res["status"] == "ok"
-    assert seen["headers"]["Authorization"] == "Bearer sk-or-env"
-    assert "sk-hermes-secret" not in blob
-    assert "HERMES_MODEL_API_KEY" not in blob
+    monkeypatch.setattr(risk, "_default_post", boom)
+    assert risk._openrouter_api_key() is None
+    assert risk.ai_enabled() is False
+    assert risk.model_notes(risk.annotate([ch("a.md", "added")]))["status"] == "off"
 
 
 def test_openrouter_key_comes_from_secret_scope(monkeypatch):
@@ -267,10 +262,12 @@ def test_ui_has_low_risk_button(session):
     httpd, port = serve(host="127.0.0.1", port=0, block=False)
     try:
         html = urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/?token={httpd.ghost_token}", timeout=5
+            f"http://127.0.0.1:{port}/", timeout=5
         ).read().decode()
     finally:
         httpd.shutdown()
     assert "Select only low-risk" in html
-    js = open(os.path.join(os.path.dirname(__file__), "..", "desktop", "plugin.js")).read()
-    assert "Select only low-risk" in js and "ghost-risk" in js
+    js = Path(__file__).resolve().parents[1].joinpath("desktop", "plugin.js").read_text(encoding="utf-8")
+    assert "host.openWorkspace" in js
+    assert "openExternal" in js
+    assert "fetch(" not in js

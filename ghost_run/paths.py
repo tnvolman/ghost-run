@@ -77,9 +77,11 @@ def remap_to_ghost(
     On success error_message is None. On outside-root, remapped is None and
     error_message explains the block.
     """
+    if "\x00" in raw_path:
+        return None, "ghost-run: blocked path containing NUL"
     try:
         resolved = resolve_under(real_root, raw_path)
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         return None, f"ghost-run: cannot resolve path {raw_path!r}: {exc}"
 
     if not is_within(resolved, real_root):

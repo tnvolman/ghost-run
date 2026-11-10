@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ghost_run.commands import slash_ghost, turn_on
+from ghost_run.paths import remap_to_ghost
 from ghost_run.diff import compute_diff
 from ghost_run.hooks import on_pre_tool_call
 from ghost_run.middleware import on_tool_request
@@ -74,6 +75,27 @@ def test_outside_working_folder_blocked(demo_project: Path, tmp_path: Path):
     )
     assert blocked and blocked["action"] == "block"
     assert outside.read_text() == "nope"
+
+
+def test_remap_rejects_embedded_nul(demo_project: Path):
+    turn_on(demo_project)
+    state = get_state()
+    remapped, err = remap_to_ghost("notes\x00.txt", state.real_root, state.ghost_root)
+    assert remapped is None
+    assert err and "NUL" in err
+    result = on_tool_request(
+        tool_name="write_file",
+        args={"path": "notes\x00.txt", "content": "nope"},
+        tool_call_id="nul",
+    )
+    assert result is None
+    blocked = on_pre_tool_call(
+        tool_name="write_file",
+        args={"path": "notes\x00.txt", "content": "nope"},
+        tool_call_id="nul",
+    )
+    assert blocked and blocked["action"] == "block"
+    assert (demo_project / "notes.txt").exists()
 
 
 def test_slash_status(demo_project: Path, monkeypatch):

@@ -18,7 +18,7 @@ from ghost_run.hooks import on_pre_tool_call
 from ghost_run.middleware import on_tool_request
 from ghost_run.sandbox import create_ghost_copy, discard_ghost_copy
 from ghost_run.state import get_state, pop_pending_block, set_pending_block
-from ghost_run.ui_server import DESKTOP_RENDERER_ORIGIN, serve
+from ghost_run.ui_server import serve
 from ghost_run.verify import (
     NOT_APPROVED,
     prepare_verify_command,
@@ -46,7 +46,7 @@ def test_ui_requires_token_and_loopback_host(tmp_path, monkeypatch):
         assert missing.value.code == 401
 
         bad = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/health?token=not-the-token",
+            f"http://127.0.0.1:{port}/api/health?token={token}",
         )
         with pytest.raises(urllib.error.HTTPError) as wrong:
             urllib.request.urlopen(bad, timeout=5)
@@ -55,8 +55,8 @@ def test_ui_requires_token_and_loopback_host(tmp_path, monkeypatch):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request(
             "GET",
-            f"/api/health?token={token}",
-            headers={"Host": "evil.example"},
+            "/api/health",
+            headers={"Host": "evil.example", "X-Ghost-Run-Token": token},
         )
         denied = conn.getresponse()
         raw_headers = {key.lower(): value for key, value in denied.getheaders()}
@@ -68,8 +68,8 @@ def test_ui_requires_token_and_loopback_host(tmp_path, monkeypatch):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request(
             "GET",
-            f"/api/health?token={token}",
-            headers={"Host": f"127.0.0.1:{port + 1}"},
+            "/api/health",
+            headers={"Host": f"127.0.0.1:{port + 1}", "X-Ghost-Run-Token": token},
         )
         wrong_port = conn.getresponse()
         assert wrong_port.status == 403
@@ -93,9 +93,11 @@ def test_ui_requires_token_and_loopback_host(tmp_path, monkeypatch):
         assert "access-control-allow-origin" not in header_names
         conn.close()
 
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/health?token={token}", timeout=5
-        ) as resp:
+        header_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/health",
+            headers={"X-Ghost-Run-Token": token},
+        )
+        with urllib.request.urlopen(header_req, timeout=5) as resp:
             payload = json.loads(resp.read().decode())
             names = {key.lower() for key in resp.headers}
         assert payload["ok"] is True
@@ -359,8 +361,15 @@ def _raw(port: int, method: str, path: str, headers: dict, body: bytes = b""):
     return resp.status, header_map, payload
 
 
-def test_desktop_origin_cors_load_and_apply(tmp_path, monkeypatch):
-    """Simulate the Desktop renderer's Origin and run Load (GET diff) plus Apply."""
+def _assert_no_cors(headers: dict) -> None:
+    names = set(headers)
+    assert "access-control-allow-origin" not in names
+    assert "access-control-allow-private-network" not in names
+    assert "access-control-allow-credentials" not in names
+
+
+def test_origin_null_gets_no_cors_header(tmp_path, monkeypatch):
+    """Origin null is not one site. Same-origin Apply still works with the token."""
     monkeypatch.setenv("GHOST_RUN_SESSION_FILE", str(tmp_path / "session.json"))
     root = tmp_path / "proj"
     root.mkdir()
@@ -371,18 +380,15 @@ def test_desktop_origin_cors_load_and_apply(tmp_path, monkeypatch):
     (state.ghost_root / "keep.txt").write_text("ghost\n", encoding="utf-8")
     httpd, port = serve(host="127.0.0.1", port=0, block=False)
     token = httpd.ghost_token
-    origin = DESKTOP_RENDERER_ORIGIN
-    assert origin == "null"
     try:
         status, headers, payload = _raw(
             port,
             "GET",
-            f"/api/diff?token={token}",
-            {"Host": f"127.0.0.1:{port}", "Origin": origin},
+            "/api/diff",
+            {"Host": f"127.0.0.1:{port}", "Origin": "null", "X-Ghost-Run-Token": token},
         )
         assert status == 200
-        assert headers.get("access-control-allow-origin") == origin
-        assert "access-control-allow-credentials" not in headers
+        _assert_no_cors(headers)
         diff = json.loads(payload)
         assert diff["ok"] is True
         assert any(row["path"] == "keep.txt" for row in diff["changes"])
@@ -390,67 +396,50 @@ def test_desktop_origin_cors_load_and_apply(tmp_path, monkeypatch):
         pre_status, pre_headers, _pre_body = _raw(
             port,
             "OPTIONS",
-            f"/api/apply?token={token}",
+            "/api/apply",
             {
                 "Host": f"127.0.0.1:{port}",
-                "Origin": origin,
+                "Origin": "null",
+                "X-Ghost-Run-Token": token,
                 "Access-Control-Request-Method": "POST",
                 "Access-Control-Request-Headers": "content-type",
             },
         )
         assert pre_status == 204
-        assert pre_headers.get("access-control-allow-origin") == origin
-        assert "POST" in pre_headers.get("access-control-allow-methods", "")
-        assert "content-type" in pre_headers.get("access-control-allow-headers", "").lower()
+        _assert_no_cors(pre_headers)
 
-        denied, denied_headers, _denied_body = _raw(
+        missing, missing_headers, _missing_body = _raw(
             port,
-            "OPTIONS",
+            "POST",
             "/api/apply",
-            {
-                "Host": f"127.0.0.1:{port}",
-                "Origin": origin,
-                "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "content-type",
-            },
+            {"Host": f"127.0.0.1:{port}", "Origin": "null", "Content-Type": "application/json"},
+            b'{"paths":["keep.txt"]}',
         )
-        assert denied == 401
+        assert missing == 401
+        _assert_no_cors(missing_headers)
 
-        apply_body = json.dumps({"paths": ["keep.txt"]}).encode()
+        # No Origin header: the printed page talking to itself.
         applied, apply_headers, apply_payload = _raw(
             port,
             "POST",
-            f"/api/apply?token={token}",
-            {
-                "Host": f"127.0.0.1:{port}",
-                "Origin": origin,
-                "Content-Type": "application/json",
-            },
-            apply_body,
-        )
-        assert applied == 200
-        assert apply_headers.get("access-control-allow-origin") == origin
-        assert json.loads(apply_payload)["ok"] is True
-        assert (root / "keep.txt").read_text(encoding="utf-8") == "ghost\n"
-
-        missing, _missing_headers, _missing_body = _raw(
-            port,
-            "POST",
             "/api/apply",
             {
                 "Host": f"127.0.0.1:{port}",
-                "Origin": origin,
                 "Content-Type": "application/json",
+                "X-Ghost-Run-Token": token,
             },
-            apply_body,
+            b'{"paths":["keep.txt"]}',
         )
-        assert missing == 401
+        assert applied == 200
+        _assert_no_cors(apply_headers)
+        assert json.loads(apply_payload)["ok"] is True
+        assert (root / "keep.txt").read_text(encoding="utf-8") == "ghost\n"
     finally:
         httpd.shutdown()
         httpd.server_close()
 
 
-def test_non_desktop_origins_get_no_cors_header(tmp_path, monkeypatch):
+def test_other_origins_get_no_cors_header(tmp_path, monkeypatch):
     monkeypatch.setenv("GHOST_RUN_SESSION_FILE", str(tmp_path / "session.json"))
     root = tmp_path / "proj"
     root.mkdir()
@@ -459,29 +448,40 @@ def test_non_desktop_origins_get_no_cors_header(tmp_path, monkeypatch):
     httpd, port = serve(host="127.0.0.1", port=0, block=False)
     token = httpd.ghost_token
     try:
-        for origin in ("https://evil.example", "http://127.0.0.1:47891", "file:///opt/hermes/index.html", "*"):
+        for origin in ("https://evil.example", "http://127.0.0.1:47891", "file:///opt/hermes/index.html", "*", "null"):
             status, headers, _payload = _raw(
                 port,
                 "GET",
-                f"/api/health?token={token}",
-                {"Host": f"127.0.0.1:{port}", "Origin": origin},
+                "/api/health",
+                {"Host": f"127.0.0.1:{port}", "Origin": origin, "X-Ghost-Run-Token": token},
             )
             assert status == 200
-            assert "access-control-allow-origin" not in headers
+            _assert_no_cors(headers)
             pre_status, pre_headers, _pre_body = _raw(
                 port,
                 "OPTIONS",
-                f"/api/apply?token={token}",
+                "/api/apply",
                 {
                     "Host": f"127.0.0.1:{port}",
                     "Origin": origin,
+                    "X-Ghost-Run-Token": token,
                     "Access-Control-Request-Method": "POST",
                     "Access-Control-Request-Headers": "content-type",
                 },
             )
             assert pre_status == 204
-            assert "access-control-allow-origin" not in pre_headers
-            assert "access-control-allow-private-network" not in pre_headers
+            _assert_no_cors(pre_headers)
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_desktop_pane_opens_review_url_instead_of_fetching():
+    src = (Path(__file__).resolve().parents[1] / "desktop" / "plugin.js").read_text(encoding="utf-8")
+    assert "host.openWorkspace" in src
+    assert "ctx.os.openExternal" in src
+    assert "area: 'panes'" in src
+    assert "fetch(" not in src
+    assert "Access-Control-Allow-Origin" not in src
+    assert "SandboxedFrame" not in src
+    assert "ctx.openWorkspace" not in src

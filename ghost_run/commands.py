@@ -119,9 +119,10 @@ def slash_ghost(raw_args: str) -> str:
         # Non-blocking hint — full server via CLI `hermes ghost ui`
         return (
             "Start the interactive pane with: hermes ghost ui\n"
-            "The command prints http://127.0.0.1:<port>/?token=<random>. "
+            "The command prints http://127.0.0.1:<port>/#token=<random>. "
             "Open that exact URL. The Host header must be 127.0.0.1:<port> "
-            "or localhost:<port>, and every request must carry the token."
+            "or localhost:<port>. API calls send X-Ghost-Run-Token. "
+            "A ?token= query is ignored."
         )
     return (
         "Usage: /ghost on|off|status|diff|verify|apply [paths...]|discard|ui\n"

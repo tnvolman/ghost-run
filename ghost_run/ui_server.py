@@ -10,15 +10,14 @@ Serves the same UX the Desktop ``plugin.js`` pane targets:
 Start with ``hermes ghost ui`` (or ``python -m ghost_run.ui_server``).
 
 The server binds to ``127.0.0.1`` only. Every request must send
-``Host: 127.0.0.1:<port>`` or ``Host: localhost:<port>`` and the per-session
-token printed in the URL (``?token=`` or header ``X-Ghost-Run-Token``).
-
-Packaged Hermes Desktop loads its renderer from ``file://`` with web
-security left on, so Chromium sends that opaque origin as the literal
-``Origin: null`` header. Only that exact origin is echoed back in
-``Access-Control-Allow-Origin``. Every other origin, including ``*``,
-gets no CORS header. Same-origin calls from this server (no ``Origin``,
-or the page's own loopback origin) keep working without one.
+``Host: 127.0.0.1:<port>`` or ``Host: localhost:<port>``. The printed URL
+puts the session token in the fragment (``#token=``). The page reads that
+once, strips it with ``history.replaceState``, and sends
+``X-Ghost-Run-Token``. A ``?token=`` query is ignored. The HTML shell is
+served after the Host check; diff, apply, discard, and verify require the
+header. Responses send no ``Access-Control-Allow-Origin`` header.
+Desktop does not fetch this port; it opens the printed URL with
+``ctx.os.openExternal``.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 from .apply import apply_paths, discard_session
 from .diff import DiffReport, compute_diff
@@ -42,12 +41,6 @@ DEFAULT_PORT = 8765
 # ``localhost`` is accepted as a Host header equivalent of 127.0.0.1.
 # The socket still binds to 127.0.0.1. Other hosts are rejected.
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
-_TOKEN_PLACEHOLDER = "__GHOST_RUN_TOKEN__"
-# Exact serialized origin of the packaged Desktop renderer (file:// + webSecurity).
-# Do not widen this to "*" or to every file URL.
-DESKTOP_RENDERER_ORIGIN = "null"
-_CORS_ALLOW_METHODS = "GET, POST, OPTIONS"
-_CORS_ALLOW_HEADERS = "Content-Type, X-Ghost-Run-Token"
 
 
 def report_to_dict(report: DiffReport) -> Dict[str, Any]:
@@ -247,10 +240,18 @@ PANE_HTML = r"""<!DOCTYPE html>
 <script>
 const state = { changes: [], selected: new Set(), active: null };
 let verifyInFlight = false;
-const GHOST_TOKEN = "__GHOST_RUN_TOKEN__";
-function api(path) {
-  const join = path.indexOf("?") === -1 ? "?" : "&";
-  return path + join + "token=" + encodeURIComponent(GHOST_TOKEN);
+let GHOST_TOKEN = "";
+(function takeFragmentToken() {
+  const raw = (window.location.hash || "").replace(/^#/, "");
+  if (!raw) return;
+  GHOST_TOKEN = new URLSearchParams(raw).get("token") || "";
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+})();
+function api(path) { return path; }
+function withAuth(init) {
+  const headers = Object.assign({}, (init && init.headers) || {});
+  if (GHOST_TOKEN) headers["X-Ghost-Run-Token"] = GHOST_TOKEN;
+  return Object.assign({}, init || {}, { headers: headers });
 }
 
 function toast(msg) {
@@ -343,7 +344,7 @@ function render() {
 }
 
 async function loadDiff() {
-  const res = await fetch(api('/api/diff'));
+  const res = await fetch(api('/api/diff'), withAuth());
   const data = await res.json();
   const meta = document.getElementById('meta');
   if (!data.ok) {
@@ -398,7 +399,7 @@ document.getElementById('verifyBtn').onclick = async () => {
   document.getElementById('verifyBanner').className = 'verify';
   document.getElementById('verifyBanner').textContent = 'Running verify…';
   try {
-    const res = await fetch(api('/api/verify'), { method: 'POST' });
+    const res = await fetch(api('/api/verify'), withAuth({ method: 'POST' }));
     const data = await res.json();
     if (data.verify) renderVerify(data.verify);
     else {
@@ -425,11 +426,11 @@ document.getElementById('selNone').onclick = () => { state.selected.clear(); ren
 document.getElementById('applyBtn').onclick = async () => {
   const paths = [...state.selected];
   if (!paths.length) { toast('Select at least one path'); return; }
-  const res = await fetch(api('/api/apply'), {
+  const res = await fetch(api('/api/apply'), withAuth({
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ paths })
-  });
+  }));
   const data = await res.json();
   toast(data.ok ? ('Applied ' + (data.actions || []).length + ' path(s)') : (data.error || 'apply failed'));
   state.selected.clear();
@@ -439,7 +440,7 @@ document.getElementById('applyBtn').onclick = async () => {
 
 document.getElementById('discardBtn').onclick = async () => {
   if (!confirm('Discard the entire ghost sandbox?')) return;
-  const res = await fetch(api('/api/discard'), { method: 'POST' });
+  const res = await fetch(api('/api/discard'), withAuth({ method: 'POST' }));
   const data = await res.json();
   toast(data.message || (data.ok ? 'Discarded' : 'discard failed'));
   state.selected.clear();
@@ -461,15 +462,6 @@ class GhostUIHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:  # quieter
         pass
 
-    def _request_origin(self) -> str:
-        return (self.headers.get("Origin") or "").strip()
-
-    def _desktop_cors_origin(self) -> Optional[str]:
-        """The one origin allowed to read this loopback API from another page."""
-        if self._request_origin() == DESKTOP_RENDERER_ORIGIN:
-            return DESKTOP_RENDERER_ORIGIN
-        return None
-
     def _send(self, code: int, body: bytes, content_type: str, *, close: bool = False) -> None:
         if close:
             self.close_connection = True
@@ -479,14 +471,6 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("X-Content-Type-Options", "nosniff")
-        allowed = self._desktop_cors_origin()
-        if allowed is not None:
-            self.send_header("Access-Control-Allow-Origin", allowed)
-            self.send_header("Vary", "Origin")
-            self.send_header("Access-Control-Allow-Methods", _CORS_ALLOW_METHODS)
-            self.send_header("Access-Control-Allow-Headers", _CORS_ALLOW_HEADERS)
-            # Chromium private-network preflight from the file renderer to loopback.
-            self.send_header("Access-Control-Allow-Private-Network", "true")
         if close:
             self.send_header("Connection", "close")
         self.end_headers()
@@ -516,12 +500,13 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         return host in (f"127.0.0.1:{port}", f"localhost:{port}")
 
+    def _is_shell(self) -> bool:
+        """The HTML shell carries no diff. The token arrives in the URL fragment."""
+        return self.command == "GET" and urlparse(self.path).path in ("/", "/index.html", "/pane")
+
     def _presented_token(self) -> str:
-        header = (self.headers.get("X-Ghost-Run-Token") or "").strip()
-        if header:
-            return header
-        values = parse_qs(urlparse(self.path).query).get("token") or []
-        return values[0] if values else ""
+        # Query-string tokens are ignored. They show up in logs and Referer.
+        return (self.headers.get("X-Ghost-Run-Token") or "").strip()
 
     def _unauthorized(self) -> bool:
         """Send 403/401 and return True when the request must not proceed."""
@@ -529,6 +514,8 @@ class GhostUIHandler(BaseHTTPRequestHandler):
             self._drain_body()
             self._json(403, {"ok": False, "error": "forbidden host"}, close=True)
             return True
+        if self._is_shell():
+            return False
         expected = getattr(self.server, "ghost_token", "") or ""
         if not _token_match(self._presented_token(), expected):
             self._drain_body()
@@ -541,8 +528,8 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         self._send(code, raw, "application/json; charset=utf-8", close=close)
 
     def do_OPTIONS(self) -> None:  # noqa: N802
-        # Preflight still needs the session token and a loopback Host.
-        # Access-Control-Allow-Origin is added only for the Desktop renderer.
+        # No CORS headers. A same-origin call that already carries the token
+        # gets an empty 204. Every other caller is rejected like any request.
         if self._unauthorized():
             return
         self._send(204, b"", "text/plain")
@@ -552,9 +539,7 @@ class GhostUIHandler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         if path in ("/", "/index.html", "/pane"):
-            token = getattr(self.server, "ghost_token", "")
-            page = PANE_HTML.replace(_TOKEN_PLACEHOLDER, token)
-            self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(200, PANE_HTML.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/api/diff":
             self._json(200, current_diff_payload())
@@ -660,19 +645,18 @@ def serve(
     httpd.ghost_token = token  # type: ignore[attr-defined]
     bound = httpd.server_address[1]
     write_port_file(bound)
-    url = f"http://127.0.0.1:{bound}/?token={token}"
+    url = f"http://127.0.0.1:{bound}/#token={token}"
     print(f"Ghost Run UI: {url}", flush=True)
     print(
         "  Host must be 127.0.0.1:<port> or localhost:<port>. Other hosts are rejected.",
         flush=True,
     )
     print(
-        "  Every request needs this token (?token= or header X-Ghost-Run-Token).",
+        "  API calls need header X-Ghost-Run-Token. A ?token= query is ignored.",
         flush=True,
     )
     print(
-        "  Cross-origin reads are allowed only from the Desktop file:// renderer "
-        "(Origin: null). Other origins get no CORS header.",
+        "  No Access-Control-Allow-Origin header is sent. Open this URL in a browser.",
         flush=True,
     )
     print("  GET  /           interactive Verify / Apply / Discard pane", flush=True)

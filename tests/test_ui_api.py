@@ -35,29 +35,27 @@ def ui_session(tmp_path, monkeypatch):
     reset_state()
 
 
-def _url(port: int, token: str, path: str) -> str:
-    return f"http://127.0.0.1:{port}{path}?token={token}"
-
-
-def _get(url: str):
-    with urllib.request.urlopen(url, timeout=5) as resp:
-        return json.loads(resp.read().decode())
-
-
-def _post(url: str, payload: dict):
+def _open(port: int, token: str, path: str, payload: dict | None = None):
+    headers = {"X-Ghost-Run-Token": token}
+    data = None
+    method = "GET"
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode()
+        method = "POST"
     req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        f"http://127.0.0.1:{port}{path}",
+        data=data,
+        headers=headers,
+        method=method,
     )
     with urllib.request.urlopen(req, timeout=5) as resp:
-        return json.loads(resp.read().decode())
+        return json.loads(resp.read().decode()) if path.startswith("/api/") else resp.read().decode()
 
 
 def test_diff_lists_badges_kinds(ui_session):
     root, state, port, token = ui_session
-    data = _get(_url(port, token, "/api/diff"))
+    data = _open(port, token, "/api/diff")
     assert data["ok"] is True
     kinds = {c["path"]: c["kind"] for c in data["changes"]}
     assert kinds["src/gone.js"] == "deleted"
@@ -71,14 +69,14 @@ def test_diff_lists_badges_kinds(ui_session):
 def test_apply_selected_and_discard(ui_session):
     root, state, port, token = ui_session
     # Apply only the deletion
-    out = _post(_url(port, token, "/api/apply"), {"paths": ["src/gone.js"]})
+    out = _open(port, token, "/api/apply", {"paths": ["src/gone.js"]})
     assert out["ok"] is True
     assert not (root / "src" / "gone.js").exists()
     assert (root / "src" / "keep.js").read_text() == "keep\n"  # not applied
     assert not (root / "NOTE.md").exists()
 
     # Discard tears down sandbox
-    out = _post(_url(port, token, "/api/discard"), {})
+    out = _open(port, token, "/api/discard", {})
     assert out["ok"] is True
     st = get_state()
     assert st.enabled is False
@@ -87,9 +85,12 @@ def test_apply_selected_and_discard(ui_session):
 
 def test_pane_html_has_controls(ui_session):
     _, _, port, token = ui_session
-    with urllib.request.urlopen(_url(port, token, "/"), timeout=5) as resp:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
         html = resp.read().decode()
         assert "access-control-allow-origin" not in {k.lower() for k in resp.headers}
+    assert "history.replaceState" in html
+    assert "X-Ghost-Run-Token" in html
+    assert "?token=" not in html
     assert "Apply selected" in html
     assert "Discard" in html
     assert "checkbox" in html

@@ -8,9 +8,10 @@ heuristics.
 
 Opt-in with ``GHOST_RUN_AI=1``. Inside Hermes the notes go through
 ``ctx.llm.complete`` so the host keeps the user's provider credentials.
-Outside Hermes, the only key read is ``OPENROUTER_API_KEY`` via
-``agent.secret_scope.get_secret`` (or that env var when Hermes is not
-installed). The main model credential is never read and never sent.
+Outside that call, the only key read is ``OPENROUTER_API_KEY`` via
+``agent.secret_scope.get_secret``. If that module cannot be imported, or
+the scope refuses the read, notes stay off. The main model credential is
+never read and never sent.
 """
 
 from __future__ import annotations
@@ -214,17 +215,15 @@ def _ai_flag() -> bool:
 
 
 def _openrouter_api_key() -> Optional[str]:
-    """Return only the OpenRouter key. Never the main Hermes model key.
+    """Return only the OpenRouter key from Hermes' secret scope.
 
-    Hermes installs resolve the name through ``agent.secret_scope.get_secret``
-    so a multiplexed profile cannot borrow another profile's env. With no
-    Hermes install, the same name is read from the environment.
+    Never reads the process environment itself, and never the main model key.
+    If ``agent.secret_scope`` cannot be imported, the read fails closed.
     """
     try:
         from agent.secret_scope import UnscopedSecretError, get_secret
     except ImportError:
-        value = os.environ.get("OPENROUTER_API_KEY")
-        return value.strip() if isinstance(value, str) and value.strip() else None
+        return None
     try:
         value = get_secret("OPENROUTER_API_KEY")
     except UnscopedSecretError:

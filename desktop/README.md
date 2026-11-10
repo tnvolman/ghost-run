@@ -1,37 +1,41 @@
 # Ghost Run — Desktop half
 
-`plugin.js` registers a Hermes Desktop **panes** surface (via `ctx.openWorkspace`
-when available, else `ctx.register({ area: 'panes', ... })`) that renders:
+`plugin.js` opens the loopback review page in the system browser. It does not
+fetch `127.0.0.1`.
 
-- per-file checkboxes
-- struck-through deletions
-- added / modified badges
-- unified diff preview
-- **Verify** (advisory Pass/Fail + truncated log; does not block Apply)
-- **Apply selected** / **Discard** buttons
+Registration, matching the Desktop SDK:
 
-The pane talks to the local agent-half API started by:
+- `host.openWorkspace` when `typeof host.openWorkspace === 'function'`
+  (`export const host` in `apps/desktop/src/sdk/index.ts`)
+- otherwise `ctx.register({ area: 'panes', ... })`
+
+The button calls `ctx.os.openExternal` (`PluginOs` in
+`apps/desktop/src/contrib/plugin.ts`) with the URL printed by:
 
 ```bash
 hermes ghost ui
-# → http://127.0.0.1:<port>/?token=<random>
+# → http://127.0.0.1:<port>/#token=<random>
 ```
 
-Paste that full URL (token included) into the pane’s API base. Packaged Desktop
-loads `file://` with web security on, so Load (`GET /api/diff`) and Apply
-(`POST /api/apply`) are cross-origin and send `Origin: null`. The UI echoes
-`Access-Control-Allow-Origin` only for that origin. The token and the loopback
-Host check still apply. Any other `Origin` gets no CORS header.
+That page is same-origin with the review server. Load and Apply run there.
+The server still requires a loopback `Host`. API calls send
+`X-Ghost-Run-Token`. A `?token=` query is ignored. The server sends no
+`Access-Control-Allow-Origin` header.
+
+The SDK sandboxed iframe (`apps/desktop/src/components/ui/sandboxed-frame.tsx`)
+is not used. Its default sandbox is `allow-scripts` only, so a page embedded
+there would execute as an opaque origin.
 
 Imports are limited to `@hermes/plugin-sdk` and `react` / `react/jsx-runtime`
 (see Hermes `plugin_validate_desktop.py`).
 
-## Headless / screen-record fallback
+## Browser page
 
-The full Electron Desktop app is not required for demos. Run:
+The full Electron app is not required to review a diff. Run:
 
 ```bash
-hermes ghost ui --port 8765
+hermes ghost ui
 ```
 
-Then open or screenshot `http://127.0.0.1:8765/` — same interactive pane.
+Open the printed URL. Same interactive pane: checkboxes, risk badges, Verify,
+Apply selected, Discard.
