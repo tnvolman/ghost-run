@@ -29,7 +29,7 @@ Manual beats:
 1. `cd` into `demo/fixture` (small web project with obvious unused files).
 2. `/ghost on` — Hermes copies the tree into a temp sandbox (copy-on-write reflink when the filesystem supports it, otherwise a real copy; never a hard link). Skips `.git`, `node_modules`, venvs, build dirs; configurable via `.ghost-runignore` / `GHOST_RUN_IGNORE`.
 3. Ask the agent: **"delete unused files"** (or have it `write_file` / `rm` via `terminal`).
-4. `hermes ghost ui` — interactive pane on `127.0.0.1`. The command prints `http://127.0.0.1:<port>/#token=<random>`. Open that exact URL. The page checks `Host` is `127.0.0.1:<port>` or `localhost:<port>`. The fragment is read once, removed from the address bar, and sent as `X-Ghost-Run-Token`. A token in the query string is rejected. The Desktop pane does not fetch this port. Paste the printed URL into it and it opens that page with `ctx.os.openExternal`.
+4. `hermes ghost ui` — interactive pane on `127.0.0.1`. The command prints `http://127.0.0.1:<port>/#token=<random>`. Open that exact URL. The page checks `Host` is `127.0.0.1:<port>` or `localhost:<port>`. The fragment is read once, removed from the address bar, and sent as `X-Ghost-Run-Token`. A query-string token is ignored and does not authenticate. The Desktop pane does not fetch this port. Paste the printed URL into it and it opens that page with `ctx.os.openExternal`.
 5. `hermes ghost verify` — or press **Verify**. The first run for a project asks you to approve the command (Hermes approval prompt, or a yes/no in the terminal). The demo fixture’s `.ghost-run-test` runs `python3 scripts/ghost_verify.py` in the ghost copy (no `node_modules`). **Pass** / **Fail** is evidence only.
 6. Apply selected paths — **or** Discard. A red Verify result does not disable Apply. Real disk stays untouched until Apply.
 
@@ -80,7 +80,7 @@ hermes ghost ui          # prints http://127.0.0.1:<port>/#token=<random>
 hermes ghost ui --open   # opens that exact URL
 ```
 
-The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). The printed URL carries the session token in the fragment (`#token=`), which the browser does not send. The page copies it into `X-Ghost-Run-Token` and strips the fragment with `history.replaceState`. A token in the query string is rejected. Responses send no `Access-Control-Allow-Origin` header. The printed page is same-origin with the server, so a normal browser loads, reviews, and applies without one.
+The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `127.0.0.1`; any other host is refused). The printed URL carries the session token in the fragment (`#token=`), which the browser does not send. The page copies it into `X-Ghost-Run-Token` and strips the fragment with `history.replaceState`. A query-string token is ignored and does not authenticate. Responses send no `Access-Control-Allow-Origin` header. The printed page is same-origin with the server, so a normal browser loads, reviews, and applies without one.
 
 `desktop/plugin.js` is a thin pane. It calls `host.openWorkspace` when that function exists (`apps/desktop/src/sdk/index.ts` exports it on `host`), and otherwise `ctx.register({ area: 'panes' })`. The button calls `ctx.os.openExternal` with the pasted loopback URL. The pane does not fetch the review server. The SDK sandboxed iframe is not used: its sandbox is scripts only, so the page inside it would run as an opaque origin and its own fetches would send `Origin: null`.
 

@@ -13,7 +13,7 @@ The server binds to ``127.0.0.1`` only. Every request must send
 ``Host: 127.0.0.1:<port>`` or ``Host: localhost:<port>``. The printed URL
 puts the session token in the fragment (``#token=``). The page reads that
 once, strips it with ``history.replaceState``, and sends
-``X-Ghost-Run-Token``. A token in the query string is rejected. The HTML shell is
+``X-Ghost-Run-Token``. A query-string token is ignored and does not authenticate. The HTML shell is
 served after the Host check; diff, apply, discard, and verify require the
 header. Responses send no ``Access-Control-Allow-Origin`` header.
 Desktop does not fetch this port; it opens the printed URL with
@@ -650,7 +650,7 @@ def serve(
         flush=True,
     )
     print(
-        "  API calls need header X-Ghost-Run-Token. A token in the query string is rejected.",
+        "  API calls need header X-Ghost-Run-Token. A query-string token is ignored and does not authenticate.",
         flush=True,
     )
     print(
