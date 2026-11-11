@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from .apply import apply_paths, discard_session
+from .apply import _clean_rel, apply_paths, discard_session
 from .diff import DiffReport, compute_diff
 from .risk import ai_enabled, annotate, blocked_flags, model_notes, summarize_counts
 from .state import get_state
@@ -262,17 +262,34 @@ function toast(msg) {
   toast._t = setTimeout(() => el.classList.remove('show'), 3200);
 }
 
-function esc(t) { return String(t || '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-
 function colorize(diff) {
-  if (!diff) return '(no unified diff)';
-  return diff.split('\n').map(line => {
-    const esc = line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    if (line.startsWith('+') && !line.startsWith('+++')) return '<span class="line-add">' + esc + '</span>';
-    if (line.startsWith('-') && !line.startsWith('---')) return '<span class="line-del">' + esc + '</span>';
-    if (line.startsWith('@@')) return '<span class="line-hunk">' + esc + '</span>';
-    return esc;
-  }).join('\n');
+  const frag = document.createDocumentFragment();
+  if (!diff) {
+    frag.append('(no unified diff)');
+    return frag;
+  }
+  const lines = diff.split('\n');
+  lines.forEach((line, i) => {
+    let node;
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      node = document.createElement('span');
+      node.className = 'line-add';
+      node.textContent = line;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      node = document.createElement('span');
+      node.className = 'line-del';
+      node.textContent = line;
+    } else if (line.startsWith('@@')) {
+      node = document.createElement('span');
+      node.className = 'line-hunk';
+      node.textContent = line;
+    } else {
+      node = document.createTextNode(line);
+    }
+    frag.appendChild(node);
+    if (i < lines.length - 1) frag.appendChild(document.createTextNode('\n'));
+  });
+  return frag;
 }
 
 function renderVerify(v) {
@@ -313,31 +330,46 @@ function render() {
     document.getElementById('diffBody').textContent = 'Nothing to show.';
     return;
   }
-  rows.innerHTML = '';
-  state.changes.forEach((ch, i) => {
+  rows.replaceChildren();
+  state.changes.forEach((ch) => {
     const div = document.createElement('div');
     div.className = 'row' + (state.active === ch.path ? ' active' : '');
     div.dataset.path = ch.path;
     const rk = ch.risk || {level: 'low', reason: ''};
-    const checked = state.selected.has(ch.path) ? 'checked' : '';
-    const pathClass = ch.kind === 'deleted' ? 'path deleted' : 'path';
-    div.innerHTML =
-      '<input type="checkbox" data-path="' + String(ch.path).replace(/"/g, '&quot;') + '" ' + checked + ' aria-label="select ' + esc(ch.path) + '"/>' +
-      '<span class="risk ' + rk.level + '" title="risk">' + rk.level + '</span>' +
-      '<span class="badge ' + ch.kind + '">' + ch.kind + '</span>' +
-      '<span class="' + pathClass + '">' + esc(ch.path) + '</span>' +
-      '<span class="reason">' + esc(rk.reason) +
-        (rk.ai_note ? '<span class="ai">AI: ' + esc(rk.ai_note) + '</span>' : '') + '</span>';
-    const cb = div.querySelector('input');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = state.selected.has(ch.path);
+    cb.dataset.path = ch.path;
+    cb.setAttribute('aria-label', 'select ' + ch.path);
     cb.addEventListener('click', (e) => {
       e.stopPropagation();
-      const path = cb.getAttribute('data-path') || div.dataset.path;
+      const path = cb.dataset.path || div.dataset.path;
       if (cb.checked) state.selected.add(path); else state.selected.delete(path);
     });
+    const risk = document.createElement('span');
+    risk.className = 'risk ' + rk.level;
+    risk.title = 'risk';
+    risk.textContent = rk.level;
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + ch.kind;
+    badge.textContent = ch.kind;
+    const pathEl = document.createElement('span');
+    pathEl.className = ch.kind === 'deleted' ? 'path deleted' : 'path';
+    pathEl.textContent = ch.path;
+    const reason = document.createElement('span');
+    reason.className = 'reason';
+    reason.textContent = rk.reason || '';
+    if (rk.ai_note) {
+      const ai = document.createElement('span');
+      ai.className = 'ai';
+      ai.textContent = 'AI: ' + rk.ai_note;
+      reason.appendChild(ai);
+    }
+    div.append(cb, risk, badge, pathEl, reason);
     div.addEventListener('click', () => {
       state.active = ch.path;
       document.getElementById('diffTitle').textContent = ch.kind + ' — ' + ch.path;
-      document.getElementById('diffBody').innerHTML = colorize(ch.unified_diff);
+      document.getElementById('diffBody').replaceChildren(colorize(ch.unified_diff));
       render();
     });
     rows.appendChild(div);
@@ -355,7 +387,10 @@ async function loadDiff() {
     render();
     return;
   }
-  meta.innerHTML = 'real: ' + data.real_root + '<br/>ghost: ' + data.ghost_root;
+  meta.replaceChildren();
+  meta.append('real: ' + data.real_root);
+  meta.appendChild(document.createElement('br'));
+  meta.append('ghost: ' + data.ghost_root);
   document.getElementById('counts').textContent =
     '+' + data.counts.added + ' added · ~' + data.counts.modified +
     ' modified · −' + data.counts.deleted + ' deleted';
@@ -367,9 +402,20 @@ async function loadDiff() {
     '<span class="risk low">' + rc.low + ' low</span>' +
     '<span style="color:var(--muted)">sorted by risk · you decide what applies</span>';
   const bl = data.blocked || [];
-  document.getElementById('blocked').innerHTML = bl.length
-    ? '<div class="blocked"><b>' + bl.length + ' blocked attempt(s)</b><br/>' + bl.slice(-5).map(b => '• ' + esc(b.reason)).join('<br/>') + '</div>'
-    : '';
+  const blockedEl = document.getElementById('blocked');
+  blockedEl.replaceChildren();
+  if (bl.length) {
+    const box = document.createElement('div');
+    box.className = 'blocked';
+    const title = document.createElement('b');
+    title.textContent = bl.length + ' blocked attempt(s)';
+    box.appendChild(title);
+    bl.slice(-5).forEach((b) => {
+      box.appendChild(document.createElement('br'));
+      box.append('• ' + (b.reason || ''));
+    });
+    blockedEl.appendChild(box);
+  }
   const ai = data.ai || {};
   document.getElementById('aisum').textContent =
     ai.status === 'ok' && ai.summary ? 'AI summary: ' + ai.summary
@@ -389,7 +435,7 @@ async function loadDiff() {
     state.active = state.changes[0].path;
     document.getElementById('diffTitle').textContent =
       state.changes[0].kind + ' — ' + state.changes[0].path;
-    document.getElementById('diffBody').innerHTML = colorize(state.changes[0].unified_diff);
+    document.getElementById('diffBody').replaceChildren(colorize(state.changes[0].unified_diff));
   }
   render();
 }
@@ -471,6 +517,38 @@ setInterval(() => loadDiff().catch(() => {}), 4000);
 </body>
 </html>
 """
+
+
+def _apply_http(payload: Any) -> Tuple[int, Dict[str, Any]]:
+    """Apply only paths that are in the current diff. Empty input changes nothing.
+
+    The CLI still treats a missing list as "every change". This HTTP path does not.
+    """
+    if not isinstance(payload, dict) or "paths" not in payload:
+        return 400, {"ok": False, "error": "paths required"}
+    paths = payload.get("paths")
+    if not isinstance(paths, list) or not paths:
+        return 400, {"ok": False, "error": "paths must be a non-empty list"}
+    cleaned: List[str] = []
+    for item in paths:
+        if not isinstance(item, str):
+            return 400, {"ok": False, "error": "paths must be a non-empty list"}
+        rel = _clean_rel(item)
+        if not rel:
+            return 400, {"ok": False, "error": "paths must be a non-empty list"}
+        cleaned.append(rel)
+    state = get_state()
+    if state.real_root is None or state.ghost_root is None or not state.ghost_root.exists():
+        return 400, {"ok": False, "error": "no active sandbox"}
+    report = compute_diff(state.real_root, state.ghost_root)
+    known = {ch.path for ch in report.all_changes}
+    if any(rel not in known for rel in cleaned):
+        return 400, {"ok": False, "error": "every path must be in the current diff"}
+    try:
+        actions = apply_paths(state, cleaned)
+    except RuntimeError as exc:
+        return 400, {"ok": False, "error": str(exc)}
+    return 200, {"ok": True, "actions": actions}
 
 
 class GhostUIHandler(BaseHTTPRequestHandler):
@@ -583,16 +661,8 @@ class GhostUIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/apply":
-            paths = payload.get("paths") if isinstance(payload, dict) else None
-            if paths is not None and not isinstance(paths, list):
-                self._json(400, {"ok": False, "error": "paths must be a list"})
-                return
-            try:
-                actions = apply_paths(get_state(), paths)
-            except RuntimeError as exc:
-                self._json(400, {"ok": False, "error": str(exc)})
-                return
-            self._json(200, {"ok": True, "actions": actions})
+            code, body = _apply_http(payload)
+            self._json(code, body)
             return
 
         if path == "/api/discard":
@@ -678,7 +748,10 @@ def serve(
     print("  GET  /api/diff   JSON change list (includes last verify)", flush=True)
     print("  GET  /api/verify last verify result", flush=True)
     print("  POST /api/verify run configured test in the ghost copy (advisory)", flush=True)
-    print("  POST /api/apply  {\"paths\":[...]}  — empty/omit = all", flush=True)
+    print(
+        "  POST /api/apply  {\"paths\":[...]}  — missing, empty, or not in the current diff is 400; nothing changes",
+        flush=True,
+    )
     print("  POST /api/discard", flush=True)
     if open_browser:
         try:

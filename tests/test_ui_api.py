@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -81,6 +80,61 @@ def test_apply_selected_and_discard(ui_session):
     st = get_state()
     assert st.enabled is False
     assert st.ghost_root is None or not Path(st.ghost_root).exists()
+
+
+def _post(port: int, token: str, payload: dict) -> tuple[int, dict]:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/apply",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "X-Ghost-Run-Token": token},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode())
+
+
+def _snapshot(root: Path) -> dict:
+    return {
+        "gone": (root / "src" / "gone.js").read_text(encoding="utf-8"),
+        "keep": (root / "src" / "keep.js").read_text(encoding="utf-8"),
+        "note": (root / "NOTE.md").exists(),
+    }
+
+
+def test_apply_rejects_missing_and_empty_paths(ui_session):
+    root, _state, port, token = ui_session
+    before = _snapshot(root)
+    for payload in ({}, {"paths": []}):
+        code, body = _post(port, token, payload)
+        assert code == 400
+        assert body["ok"] is False
+        assert _snapshot(root) == before
+
+
+def test_apply_rejects_path_not_in_diff(ui_session):
+    root, state, port, token = ui_session
+    same = root / "src" / "same.js"
+    same.write_text("same\n", encoding="utf-8")
+    (state.ghost_root / "src" / "same.js").write_text("same\n", encoding="utf-8")
+    before = _snapshot(root)
+    before["same"] = same.read_text(encoding="utf-8")
+
+    code, body = _post(port, token, {"paths": ["src/same.js"]})
+    assert code == 400
+    assert body["ok"] is False
+    assert same.read_text(encoding="utf-8") == "same\n"
+    assert _snapshot(root) == {k: before[k] for k in ("gone", "keep", "note")}
+
+    code, body = _post(port, token, {"paths": ["src/gone.js", "src/same.js"]})
+    assert code == 400
+    assert body["ok"] is False
+    assert (root / "src" / "gone.js").read_text(encoding="utf-8") == before["gone"]
+    assert (root / "src" / "keep.js").read_text(encoding="utf-8") == before["keep"]
+    assert same.read_text(encoding="utf-8") == "same\n"
+    assert not (root / "NOTE.md").exists()
 
 
 def test_pane_html_has_controls(ui_session):

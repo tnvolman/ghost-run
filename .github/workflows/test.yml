@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install pytest
-        run: pip install pytest pyyaml playwright
+        run: pip install pytest==9.2.0 pyyaml==6.0.1 playwright==1.65.0
       - name: Install Chromium for the review page
         run: python -m playwright install --with-deps chromium
       - name: Unit tests

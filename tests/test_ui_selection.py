@@ -258,6 +258,73 @@ def test_high_confirm_accepted_posts_the_high_path(review_session):
     assert (root / "package.json").read_text(encoding="utf-8") == REAL["package.json"]
 
 
+def test_quoted_filename_round_trips_without_running_script(tmp_path, monkeypatch):
+    """A filename with quotes and markup is text, and Apply posts it unchanged."""
+    name = 'a"&<b>.txt'
+    monkeypatch.setenv("GHOST_RUN_SESSION_FILE", str(tmp_path / "session.json"))
+    monkeypatch.delenv("GHOST_RUN_AI", raising=False)
+    from ghost_run.state import reset_state
+
+    reset_state()
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / name).write_text("old\n", encoding="utf-8")
+    turn_on(root)
+    state = get_state()
+    (Path(state.ghost_root) / name).write_text("new\n", encoding="utf-8")
+    import io
+    from contextlib import redirect_stdout
+
+    with redirect_stdout(io.StringIO()):
+        httpd, port = serve(host="127.0.0.1", port=0, block=False)
+    token = httpd.ghost_token
+    posts: list[list[str]] = []
+    dialogs: list[str] = []
+    try:
+        with sync_playwright() as p:
+            browser = _launch(p)
+            page = browser.new_page()
+            page.add_init_script("window.__xss = 0")
+            page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
+
+            def on_request(request):
+                if request.method == "POST" and request.url.endswith("/api/apply"):
+                    body = json.loads(request.post_data or "{}")
+                    posts.append(body.get("paths"))
+
+            page.on("request", on_request)
+            page.goto(f"http://127.0.0.1:{port}/#token={token}", wait_until="domcontentloaded")
+            page.wait_for_selector(".row")
+            shown = page.evaluate(
+                """(name) => {
+                  const row = [...document.querySelectorAll('.row')]
+                    .find(r => r.dataset.path === name);
+                  const cb = row && row.querySelector('input[type=checkbox]');
+                  return {
+                    path: row ? row.dataset.path : null,
+                    text: row ? row.querySelector('.path').textContent : null,
+                    dataPath: cb ? cb.getAttribute('data-path') : null,
+                    xss: window.__xss
+                  };
+                }""",
+                name,
+            )
+            assert shown["path"] == name
+            assert shown["text"] == name
+            assert shown["dataPath"] == name
+            assert shown["xss"] == 0
+            page.locator("#applyBtn").click()
+            page.wait_for_timeout(500)
+            assert page.evaluate("() => window.__xss") == 0
+            browser.close()
+    finally:
+        httpd.shutdown()
+        reset_state()
+    assert dialogs == []
+    assert posts == [[name]], posts
+    assert (root / name).read_text(encoding="utf-8") == "new\n"
+
+
 def test_interval_reload_does_not_tick_high(review_session):
     _root, port, token = review_session
     with sync_playwright() as p:
