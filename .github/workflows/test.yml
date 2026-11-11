@@ -16,7 +16,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install pytest
-        run: pip install pytest pyyaml
+        run: pip install pytest pyyaml playwright
+      - name: Install Chromium for the review page
+        run: python -m playwright install --with-deps chromium
       - name: Unit tests
         run: python -m pytest --tb=line -p no:cacheprovider
       - name: Local catalog validation

@@ -322,7 +322,7 @@ function render() {
     const checked = state.selected.has(ch.path) ? 'checked' : '';
     const pathClass = ch.kind === 'deleted' ? 'path deleted' : 'path';
     div.innerHTML =
-      '<input type="checkbox" ' + checked + ' aria-label="select ' + ch.path + '"/>' +
+      '<input type="checkbox" data-path="' + String(ch.path).replace(/"/g, '&quot;') + '" ' + checked + ' aria-label="select ' + esc(ch.path) + '"/>' +
       '<span class="risk ' + rk.level + '" title="risk">' + rk.level + '</span>' +
       '<span class="badge ' + ch.kind + '">' + ch.kind + '</span>' +
       '<span class="' + pathClass + '">' + esc(ch.path) + '</span>' +
@@ -331,7 +331,8 @@ function render() {
     const cb = div.querySelector('input');
     cb.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (cb.checked) state.selected.add(ch.path); else state.selected.delete(ch.path);
+      const path = cb.getAttribute('data-path') || div.dataset.path;
+      if (cb.checked) state.selected.add(path); else state.selected.delete(path);
     });
     div.addEventListener('click', () => {
       state.active = ch.path;
@@ -374,9 +375,12 @@ async function loadDiff() {
     ai.status === 'ok' && ai.summary ? 'AI summary: ' + ai.summary
     : ai.status === 'fallback' ? 'AI summary unavailable; showing heuristic flags.' : '';
   if (!verifyInFlight) renderVerify(data.verify || null);
-  // Keep prior selection when paths still exist; default-select all on first load.
+  // Keep prior selection when paths still exist. When empty (first load
+  // and after Apply), default-select everything except HIGH.
   if (state.selected.size === 0) {
-    state.changes.forEach(c => state.selected.add(c.path));
+    state.changes.forEach(c => {
+      if (((c.risk || {}).level || 'low') !== 'high') state.selected.add(c.path);
+    });
   } else {
     const alive = new Set(state.changes.map(c => c.path));
     [...state.selected].forEach(p => { if (!alive.has(p)) state.selected.delete(p); });
@@ -423,9 +427,22 @@ document.getElementById('selLow').onclick = () => {
 };
 document.getElementById('selNone').onclick = () => { state.selected.clear(); render(); };
 
+function selectedPathsFromDom() {
+  return [...document.querySelectorAll('.row input[type=checkbox][data-path]:checked')]
+    .map(cb => cb.getAttribute('data-path'))
+    .filter(Boolean);
+}
+
 document.getElementById('applyBtn').onclick = async () => {
-  const paths = [...state.selected];
+  // Trust the visible ticks, not a possibly stale Set.
+  const paths = selectedPathsFromDom();
+  state.selected = new Set(paths);
   if (!paths.length) { toast('Select at least one path'); return; }
+  const highPaths = paths.filter(p => {
+    const ch = state.changes.find(c => c.path === p);
+    return ch && (ch.risk || {}).level === 'high';
+  });
+  if (highPaths.length && !confirm('Apply high-risk change(s): ' + highPaths.join(', ') + '?')) return;
   const res = await fetch(api('/api/apply'), withAuth({
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
