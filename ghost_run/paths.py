@@ -77,9 +77,11 @@ def remap_to_ghost(
     On success error_message is None. On outside-root, remapped is None and
     error_message explains the block.
     """
+    if "\x00" in raw_path:
+        return None, "ghost-run: blocked path containing NUL"
     try:
         resolved = resolve_under(real_root, raw_path)
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         return None, f"ghost-run: cannot resolve path {raw_path!r}: {exc}"
 
     if not is_within(resolved, real_root):
@@ -90,6 +92,11 @@ def remap_to_ghost(
 
     rel = resolved.relative_to(real_root.resolve())
     ghost_path = (ghost_root / rel).resolve()
+    if not is_within(ghost_path, ghost_root):
+        return None, (
+            f"ghost-run: blocked path outside ghost copy: {raw_path!r} "
+            f"(resolved {ghost_path}, ghost {ghost_root})"
+        )
     # Prefer absolute ghost path so Hermes file tools hit the sandbox regardless
     # of the process cwd.
     return str(ghost_path), None

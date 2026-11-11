@@ -10,9 +10,14 @@ Serves the same UX the Desktop ``plugin.js`` pane targets:
 Start with ``hermes ghost ui`` (or ``python -m ghost_run.ui_server``).
 
 The server binds to ``127.0.0.1`` only. Every request must send
-``Host: 127.0.0.1:<port>`` or ``Host: localhost:<port>`` and the per-session
-token printed in the URL (``?token=`` or header ``X-Ghost-Run-Token``).
-There is no ``Access-Control-Allow-Origin`` header.
+``Host: 127.0.0.1:<port>`` or ``Host: localhost:<port>``. The printed URL
+puts the session token in the fragment (``#token=``). The page reads that
+once, strips it with ``history.replaceState``, and sends
+``X-Ghost-Run-Token``. A query-string token is ignored and does not authenticate. The HTML shell is
+served after the Host check; diff, apply, discard, and verify require the
+header. Responses send no ``Access-Control-Allow-Origin`` header.
+Desktop does not fetch this port; it opens the printed URL with
+``ctx.os.openExternal``.
 """
 
 from __future__ import annotations
@@ -23,9 +28,9 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
-from .apply import apply_paths, discard_session
+from .apply import _clean_rel, apply_paths, discard_session
 from .diff import DiffReport, compute_diff
 from .risk import ai_enabled, annotate, blocked_flags, model_notes, summarize_counts
 from .state import get_state
@@ -36,7 +41,6 @@ DEFAULT_PORT = 8765
 # ``localhost`` is accepted as a Host header equivalent of 127.0.0.1.
 # The socket still binds to 127.0.0.1. Other hosts are rejected.
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
-_TOKEN_PLACEHOLDER = "__GHOST_RUN_TOKEN__"
 
 
 def report_to_dict(report: DiffReport) -> Dict[str, Any]:
@@ -236,10 +240,18 @@ PANE_HTML = r"""<!DOCTYPE html>
 <script>
 const state = { changes: [], selected: new Set(), active: null };
 let verifyInFlight = false;
-const GHOST_TOKEN = "__GHOST_RUN_TOKEN__";
-function api(path) {
-  const join = path.indexOf("?") === -1 ? "?" : "&";
-  return path + join + "token=" + encodeURIComponent(GHOST_TOKEN);
+let GHOST_TOKEN = "";
+(function takeFragmentToken() {
+  const raw = (window.location.hash || "").replace(/^#/, "");
+  if (!raw) return;
+  GHOST_TOKEN = new URLSearchParams(raw).get("token") || "";
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+})();
+function api(path) { return path; }
+function withAuth(init) {
+  const headers = Object.assign({}, (init && init.headers) || {});
+  if (GHOST_TOKEN) headers["X-Ghost-Run-Token"] = GHOST_TOKEN;
+  return Object.assign({}, init || {}, { headers: headers });
 }
 
 function toast(msg) {
@@ -250,17 +262,34 @@ function toast(msg) {
   toast._t = setTimeout(() => el.classList.remove('show'), 3200);
 }
 
-function esc(t) { return String(t || '').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-
 function colorize(diff) {
-  if (!diff) return '(no unified diff)';
-  return diff.split('\n').map(line => {
-    const esc = line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    if (line.startsWith('+') && !line.startsWith('+++')) return '<span class="line-add">' + esc + '</span>';
-    if (line.startsWith('-') && !line.startsWith('---')) return '<span class="line-del">' + esc + '</span>';
-    if (line.startsWith('@@')) return '<span class="line-hunk">' + esc + '</span>';
-    return esc;
-  }).join('\n');
+  const frag = document.createDocumentFragment();
+  if (!diff) {
+    frag.append('(no unified diff)');
+    return frag;
+  }
+  const lines = diff.split('\n');
+  lines.forEach((line, i) => {
+    let node;
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      node = document.createElement('span');
+      node.className = 'line-add';
+      node.textContent = line;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      node = document.createElement('span');
+      node.className = 'line-del';
+      node.textContent = line;
+    } else if (line.startsWith('@@')) {
+      node = document.createElement('span');
+      node.className = 'line-hunk';
+      node.textContent = line;
+    } else {
+      node = document.createTextNode(line);
+    }
+    frag.appendChild(node);
+    if (i < lines.length - 1) frag.appendChild(document.createTextNode('\n'));
+  });
+  return frag;
 }
 
 function renderVerify(v) {
@@ -301,30 +330,46 @@ function render() {
     document.getElementById('diffBody').textContent = 'Nothing to show.';
     return;
   }
-  rows.innerHTML = '';
-  state.changes.forEach((ch, i) => {
+  rows.replaceChildren();
+  state.changes.forEach((ch) => {
     const div = document.createElement('div');
     div.className = 'row' + (state.active === ch.path ? ' active' : '');
     div.dataset.path = ch.path;
     const rk = ch.risk || {level: 'low', reason: ''};
-    const checked = state.selected.has(ch.path) ? 'checked' : '';
-    const pathClass = ch.kind === 'deleted' ? 'path deleted' : 'path';
-    div.innerHTML =
-      '<input type="checkbox" ' + checked + ' aria-label="select ' + ch.path + '"/>' +
-      '<span class="risk ' + rk.level + '" title="risk">' + rk.level + '</span>' +
-      '<span class="badge ' + ch.kind + '">' + ch.kind + '</span>' +
-      '<span class="' + pathClass + '">' + esc(ch.path) + '</span>' +
-      '<span class="reason">' + esc(rk.reason) +
-        (rk.ai_note ? '<span class="ai">AI: ' + esc(rk.ai_note) + '</span>' : '') + '</span>';
-    const cb = div.querySelector('input');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = state.selected.has(ch.path);
+    cb.dataset.path = ch.path;
+    cb.setAttribute('aria-label', 'select ' + ch.path);
     cb.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (cb.checked) state.selected.add(ch.path); else state.selected.delete(ch.path);
+      const path = cb.dataset.path || div.dataset.path;
+      if (cb.checked) state.selected.add(path); else state.selected.delete(path);
     });
+    const risk = document.createElement('span');
+    risk.className = 'risk ' + rk.level;
+    risk.title = 'risk';
+    risk.textContent = rk.level;
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + ch.kind;
+    badge.textContent = ch.kind;
+    const pathEl = document.createElement('span');
+    pathEl.className = ch.kind === 'deleted' ? 'path deleted' : 'path';
+    pathEl.textContent = ch.path;
+    const reason = document.createElement('span');
+    reason.className = 'reason';
+    reason.textContent = rk.reason || '';
+    if (rk.ai_note) {
+      const ai = document.createElement('span');
+      ai.className = 'ai';
+      ai.textContent = 'AI: ' + rk.ai_note;
+      reason.appendChild(ai);
+    }
+    div.append(cb, risk, badge, pathEl, reason);
     div.addEventListener('click', () => {
       state.active = ch.path;
       document.getElementById('diffTitle').textContent = ch.kind + ' — ' + ch.path;
-      document.getElementById('diffBody').innerHTML = colorize(ch.unified_diff);
+      document.getElementById('diffBody').replaceChildren(colorize(ch.unified_diff));
       render();
     });
     rows.appendChild(div);
@@ -332,7 +377,7 @@ function render() {
 }
 
 async function loadDiff() {
-  const res = await fetch(api('/api/diff'));
+  const res = await fetch(api('/api/diff'), withAuth());
   const data = await res.json();
   const meta = document.getElementById('meta');
   if (!data.ok) {
@@ -342,7 +387,10 @@ async function loadDiff() {
     render();
     return;
   }
-  meta.innerHTML = 'real: ' + data.real_root + '<br/>ghost: ' + data.ghost_root;
+  meta.replaceChildren();
+  meta.append('real: ' + data.real_root);
+  meta.appendChild(document.createElement('br'));
+  meta.append('ghost: ' + data.ghost_root);
   document.getElementById('counts').textContent =
     '+' + data.counts.added + ' added · ~' + data.counts.modified +
     ' modified · −' + data.counts.deleted + ' deleted';
@@ -354,17 +402,31 @@ async function loadDiff() {
     '<span class="risk low">' + rc.low + ' low</span>' +
     '<span style="color:var(--muted)">sorted by risk · you decide what applies</span>';
   const bl = data.blocked || [];
-  document.getElementById('blocked').innerHTML = bl.length
-    ? '<div class="blocked"><b>' + bl.length + ' blocked attempt(s)</b><br/>' + bl.slice(-5).map(b => '• ' + esc(b.reason)).join('<br/>') + '</div>'
-    : '';
+  const blockedEl = document.getElementById('blocked');
+  blockedEl.replaceChildren();
+  if (bl.length) {
+    const box = document.createElement('div');
+    box.className = 'blocked';
+    const title = document.createElement('b');
+    title.textContent = bl.length + ' blocked attempt(s)';
+    box.appendChild(title);
+    bl.slice(-5).forEach((b) => {
+      box.appendChild(document.createElement('br'));
+      box.append('• ' + (b.reason || ''));
+    });
+    blockedEl.appendChild(box);
+  }
   const ai = data.ai || {};
   document.getElementById('aisum').textContent =
     ai.status === 'ok' && ai.summary ? 'AI summary: ' + ai.summary
     : ai.status === 'fallback' ? 'AI summary unavailable; showing heuristic flags.' : '';
   if (!verifyInFlight) renderVerify(data.verify || null);
-  // Keep prior selection when paths still exist; default-select all on first load.
+  // Keep prior selection when paths still exist. When empty (first load
+  // and after Apply), default-select everything except HIGH.
   if (state.selected.size === 0) {
-    state.changes.forEach(c => state.selected.add(c.path));
+    state.changes.forEach(c => {
+      if (((c.risk || {}).level || 'low') !== 'high') state.selected.add(c.path);
+    });
   } else {
     const alive = new Set(state.changes.map(c => c.path));
     [...state.selected].forEach(p => { if (!alive.has(p)) state.selected.delete(p); });
@@ -373,7 +435,7 @@ async function loadDiff() {
     state.active = state.changes[0].path;
     document.getElementById('diffTitle').textContent =
       state.changes[0].kind + ' — ' + state.changes[0].path;
-    document.getElementById('diffBody').innerHTML = colorize(state.changes[0].unified_diff);
+    document.getElementById('diffBody').replaceChildren(colorize(state.changes[0].unified_diff));
   }
   render();
 }
@@ -387,7 +449,7 @@ document.getElementById('verifyBtn').onclick = async () => {
   document.getElementById('verifyBanner').className = 'verify';
   document.getElementById('verifyBanner').textContent = 'Running verify…';
   try {
-    const res = await fetch(api('/api/verify'), { method: 'POST' });
+    const res = await fetch(api('/api/verify'), withAuth({ method: 'POST' }));
     const data = await res.json();
     if (data.verify) renderVerify(data.verify);
     else {
@@ -411,14 +473,27 @@ document.getElementById('selLow').onclick = () => {
 };
 document.getElementById('selNone').onclick = () => { state.selected.clear(); render(); };
 
+function selectedPathsFromDom() {
+  return [...document.querySelectorAll('.row input[type=checkbox][data-path]:checked')]
+    .map(cb => cb.getAttribute('data-path'))
+    .filter(Boolean);
+}
+
 document.getElementById('applyBtn').onclick = async () => {
-  const paths = [...state.selected];
+  // Trust the visible ticks, not a possibly stale Set.
+  const paths = selectedPathsFromDom();
+  state.selected = new Set(paths);
   if (!paths.length) { toast('Select at least one path'); return; }
-  const res = await fetch(api('/api/apply'), {
+  const highPaths = paths.filter(p => {
+    const ch = state.changes.find(c => c.path === p);
+    return ch && (ch.risk || {}).level === 'high';
+  });
+  if (highPaths.length && !confirm('Apply high-risk change(s): ' + highPaths.join(', ') + '?')) return;
+  const res = await fetch(api('/api/apply'), withAuth({
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ paths })
-  });
+  }));
   const data = await res.json();
   toast(data.ok ? ('Applied ' + (data.actions || []).length + ' path(s)') : (data.error || 'apply failed'));
   state.selected.clear();
@@ -428,7 +503,7 @@ document.getElementById('applyBtn').onclick = async () => {
 
 document.getElementById('discardBtn').onclick = async () => {
   if (!confirm('Discard the entire ghost sandbox?')) return;
-  const res = await fetch(api('/api/discard'), { method: 'POST' });
+  const res = await fetch(api('/api/discard'), withAuth({ method: 'POST' }));
   const data = await res.json();
   toast(data.message || (data.ok ? 'Discarded' : 'discard failed'));
   state.selected.clear();
@@ -442,6 +517,38 @@ setInterval(() => loadDiff().catch(() => {}), 4000);
 </body>
 </html>
 """
+
+
+def _apply_http(payload: Any) -> Tuple[int, Dict[str, Any]]:
+    """Apply only paths that are in the current diff. Empty input changes nothing.
+
+    The CLI still treats a missing list as "every change". This HTTP path does not.
+    """
+    if not isinstance(payload, dict) or "paths" not in payload:
+        return 400, {"ok": False, "error": "paths required"}
+    paths = payload.get("paths")
+    if not isinstance(paths, list) or not paths:
+        return 400, {"ok": False, "error": "paths must be a non-empty list"}
+    cleaned: List[str] = []
+    for item in paths:
+        if not isinstance(item, str):
+            return 400, {"ok": False, "error": "paths must be a non-empty list"}
+        rel = _clean_rel(item)
+        if not rel:
+            return 400, {"ok": False, "error": "paths must be a non-empty list"}
+        cleaned.append(rel)
+    state = get_state()
+    if state.real_root is None or state.ghost_root is None or not state.ghost_root.exists():
+        return 400, {"ok": False, "error": "no active sandbox"}
+    report = compute_diff(state.real_root, state.ghost_root)
+    known = {ch.path for ch in report.all_changes}
+    if any(rel not in known for rel in cleaned):
+        return 400, {"ok": False, "error": "every path must be in the current diff"}
+    try:
+        actions = apply_paths(state, cleaned)
+    except RuntimeError as exc:
+        return 400, {"ok": False, "error": str(exc)}
+    return 200, {"ok": True, "actions": actions}
 
 
 class GhostUIHandler(BaseHTTPRequestHandler):
@@ -488,12 +595,13 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         return host in (f"127.0.0.1:{port}", f"localhost:{port}")
 
+    def _is_shell(self) -> bool:
+        """The HTML shell carries no diff. The token arrives in the URL fragment."""
+        return self.command == "GET" and urlparse(self.path).path in ("/", "/index.html", "/pane")
+
     def _presented_token(self) -> str:
-        header = (self.headers.get("X-Ghost-Run-Token") or "").strip()
-        if header:
-            return header
-        values = parse_qs(urlparse(self.path).query).get("token") or []
-        return values[0] if values else ""
+        # Query-string tokens are ignored. They show up in logs and Referer.
+        return (self.headers.get("X-Ghost-Run-Token") or "").strip()
 
     def _unauthorized(self) -> bool:
         """Send 403/401 and return True when the request must not proceed."""
@@ -501,6 +609,8 @@ class GhostUIHandler(BaseHTTPRequestHandler):
             self._drain_body()
             self._json(403, {"ok": False, "error": "forbidden host"}, close=True)
             return True
+        if self._is_shell():
+            return False
         expected = getattr(self.server, "ghost_token", "") or ""
         if not _token_match(self._presented_token(), expected):
             self._drain_body()
@@ -513,8 +623,8 @@ class GhostUIHandler(BaseHTTPRequestHandler):
         self._send(code, raw, "application/json; charset=utf-8", close=close)
 
     def do_OPTIONS(self) -> None:  # noqa: N802
-        # No CORS headers. Same-origin calls that already carry the token get
-        # an empty 204; everyone else is rejected like any other request.
+        # No CORS headers. A same-origin call that already carries the token
+        # gets an empty 204. Every other caller is rejected like any request.
         if self._unauthorized():
             return
         self._send(204, b"", "text/plain")
@@ -524,9 +634,7 @@ class GhostUIHandler(BaseHTTPRequestHandler):
             return
         path = urlparse(self.path).path
         if path in ("/", "/index.html", "/pane"):
-            token = getattr(self.server, "ghost_token", "")
-            page = PANE_HTML.replace(_TOKEN_PLACEHOLDER, token)
-            self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(200, PANE_HTML.encode("utf-8"), "text/html; charset=utf-8")
             return
         if path == "/api/diff":
             self._json(200, current_diff_payload())
@@ -553,16 +661,8 @@ class GhostUIHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/apply":
-            paths = payload.get("paths") if isinstance(payload, dict) else None
-            if paths is not None and not isinstance(paths, list):
-                self._json(400, {"ok": False, "error": "paths must be a list"})
-                return
-            try:
-                actions = apply_paths(get_state(), paths)
-            except RuntimeError as exc:
-                self._json(400, {"ok": False, "error": str(exc)})
-                return
-            self._json(200, {"ok": True, "actions": actions})
+            code, body = _apply_http(payload)
+            self._json(code, body)
             return
 
         if path == "/api/discard":
@@ -589,8 +689,6 @@ class GhostUIHandler(BaseHTTPRequestHandler):
 
 
 def write_port_file(port: int) -> Path:
-    path = Path.home() / ".hermes" / "ghost-run" / "ui.port"
-    # Prefer HERMES_HOME / session dir when set via env in state module
     from .state import _default_session_path
 
     path = _default_session_path().parent / "ui.port"
@@ -632,21 +730,28 @@ def serve(
     httpd.ghost_token = token  # type: ignore[attr-defined]
     bound = httpd.server_address[1]
     write_port_file(bound)
-    url = f"http://127.0.0.1:{bound}/?token={token}"
+    url = f"http://127.0.0.1:{bound}/#token={token}"
     print(f"Ghost Run UI: {url}", flush=True)
     print(
         "  Host must be 127.0.0.1:<port> or localhost:<port>. Other hosts are rejected.",
         flush=True,
     )
     print(
-        "  Every request needs this token (?token= or header X-Ghost-Run-Token).",
+        "  API calls need header X-Ghost-Run-Token. A query-string token is ignored and does not authenticate.",
+        flush=True,
+    )
+    print(
+        "  No Access-Control-Allow-Origin header is sent. Open this URL in a browser.",
         flush=True,
     )
     print("  GET  /           interactive Verify / Apply / Discard pane", flush=True)
     print("  GET  /api/diff   JSON change list (includes last verify)", flush=True)
     print("  GET  /api/verify last verify result", flush=True)
     print("  POST /api/verify run configured test in the ghost copy (advisory)", flush=True)
-    print("  POST /api/apply  {\"paths\":[...]}  — empty/omit = all", flush=True)
+    print(
+        "  POST /api/apply  {\"paths\":[...]}  — missing, empty, or not in the current diff is 400; nothing changes",
+        flush=True,
+    )
     print("  POST /api/discard", flush=True)
     if open_browser:
         try:

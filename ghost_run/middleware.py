@@ -16,6 +16,15 @@ PATH_TOOLS: Set[str] = {"write_file", "patch", "read_file", "search_files"}
 # Absolute paths inside the real root that appear in a shell command.
 _ABS_PATH_IN_CMD = re.compile(r"(?P<path>/(?:[^;\s|&<>'\"]+))")
 
+# V4A headers, same shapes Hermes' patch tool accepts (including ``***Update File:``).
+# Move carries two paths: ``*** Move File: <src> -> <dst>`` (source and move-to).
+_V4A_SINGLE_HEADER_RE = re.compile(
+    r"^(\*\*\*\s*(Update|Add|Delete)\s+File:\s*)(.+)$"
+)
+_V4A_MOVE_HEADER_RE = re.compile(
+    r"^(\*\*\*\s*Move\s+File:\s*)(.+?)\s*->\s*(.+)$"
+)
+
 
 def _remap_command_paths(command: str, real_root, ghost_root) -> str:
     """Rewrite absolute paths under real_root to their ghost counterparts."""
@@ -41,6 +50,77 @@ def _tool_call_id(kwargs: Dict[str, Any]) -> str:
 def _queue_block(message: str, tool_call_id: str) -> None:
     """Record a block for this call only. The matching pre_tool_call pops it."""
     set_pending_block(message, tool_call_id)
+
+
+def _remap_header_path(raw: str, real_root, ghost_root) -> tuple[Optional[str], Optional[str]]:
+    text = raw.strip()
+    if not text:
+        return None, "ghost-run: blocked empty path in a multi-file patch header"
+    return remap_to_ghost(text, real_root, ghost_root)
+
+
+def rewrite_v4a_patch(patch: str, real_root, ghost_root) -> tuple[Optional[str], Optional[str]]:
+    """Rewrite every V4A file header onto the ghost copy.
+
+    Update, Add, Delete, and both ends of Move are remapped. One escaping
+    path fails the whole patch: ``(None, error)``. A patch-mode body with no
+    file headers is rejected too, because those targets would stay on the
+    real working directory.
+    """
+    found = False
+    rewritten: list[str] = []
+    for line in patch.split("\n"):
+        cr = "\r" if line.endswith("\r") else ""
+        body = line[:-1] if cr else line
+        move = _V4A_MOVE_HEADER_RE.match(body)
+        if move:
+            found = True
+            src, src_err = _remap_header_path(move.group(2), real_root, ghost_root)
+            if src_err:
+                return None, src_err
+            dst, dst_err = _remap_header_path(move.group(3), real_root, ghost_root)
+            if dst_err:
+                return None, dst_err
+            rewritten.append(f"{move.group(1)}{src} -> {dst}{cr}")
+            continue
+        single = _V4A_SINGLE_HEADER_RE.match(body)
+        if single:
+            found = True
+            mapped, err = _remap_header_path(single.group(3), real_root, ghost_root)
+            if err:
+                return None, err
+            rewritten.append(f"{single.group(1)}{mapped}{cr}")
+            continue
+        rewritten.append(line)
+    if not found:
+        return None, (
+            "ghost-run: blocked multi-file patch with no Update/Add/Delete/Move "
+            "file headers while Ghost Mode is on"
+        )
+    return "\n".join(rewritten), None
+
+
+def _remap_patch_mode(new_args: Dict[str, Any], state) -> Optional[str]:
+    """Rewrite ``mode="patch"`` headers. Return an error message, or None.
+
+    On error the caller queues a block and must not return rewritten args.
+    """
+    if "path" in new_args and new_args.get("path") not in (None, ""):
+        raw_path = new_args.get("path")
+        if not isinstance(raw_path, str):
+            return "ghost-run: blocked non-string path on a multi-file patch"
+        remapped, err = remap_to_ghost(raw_path, state.real_root, state.ghost_root)
+        if err:
+            return err
+        new_args["path"] = remapped
+    patch_text = new_args.get("patch")
+    if not isinstance(patch_text, str) or not patch_text.strip():
+        return "ghost-run: blocked patch mode without patch content while Ghost Mode is on"
+    rewritten, err = rewrite_v4a_patch(patch_text, state.real_root, state.ghost_root)
+    if err:
+        return err
+    new_args["patch"] = rewritten
+    return None
 
 
 def on_tool_request(
@@ -80,15 +160,26 @@ def on_tool_request(
     reason = "ghost mode path remap"
 
     if tool_name in PATH_TOOLS:
-        raw = new_args.get("path", ".")
-        if not isinstance(raw, str):
-            raw = "."
-        remapped, err = remap_to_ghost(raw, state.real_root, state.ghost_root)
-        if err:
-            _queue_block(err, call_id)
-            return None
-        new_args["path"] = remapped
-        changed = True
+        # mode=patch names its targets in the patch body, not in `path`.
+        # Those headers resolve against the real working directory unless
+        # every one of them is rewritten onto the ghost copy.
+        if tool_name == "patch" and new_args.get("mode") == "patch":
+            err = _remap_patch_mode(new_args, state)
+            if err:
+                _queue_block(err, call_id)
+                return None
+            changed = True
+            reason = "ghost mode patch header remap"
+        else:
+            raw = new_args.get("path", ".")
+            if not isinstance(raw, str):
+                raw = "."
+            remapped, err = remap_to_ghost(raw, state.real_root, state.ghost_root)
+            if err:
+                _queue_block(err, call_id)
+                return None
+            new_args["path"] = remapped
+            changed = True
 
     elif tool_name == "terminal":
         command = new_args.get("command")

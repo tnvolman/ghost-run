@@ -1,0 +1,35 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: pip install pytest==9.2.0 pyyaml==6.0.1 playwright==1.65.0
+      - name: Install Chromium for the review page
+        run: python -m playwright install --with-deps chromium
+      - name: Unit tests
+        run: python -m pytest --tb=line -p no:cacheprovider
+      - name: Local catalog validation
+        run: python scripts/validate_local.py
+      - name: Desktop pane does not fetch loopback
+        run: |
+          if grep -E 'fetch[[:space:]]*\(' desktop/plugin.js; then
+            echo "desktop/plugin.js must not call fetch"
+            exit 1
+          fi
+          if grep -E '127\.0\.0\.1|localhost' desktop/plugin.js | grep -E 'fetch[[:space:]]*\(|XMLHttpRequest'; then
+            echo "desktop/plugin.js must not fetch loopback"
+            exit 1
+          fi

@@ -12,13 +12,35 @@ from typing import Any, Optional
 _SESSION_ENV = "GHOST_RUN_SESSION_FILE"
 
 
+def _hermes_home_dir() -> Path:
+    """Hermes home for this process.
+
+    ``hermes_constants.get_hermes_home()`` follows the context-local profile
+    override, then ``HERMES_HOME``, then the platform default. If that import
+    is unavailable, fall back to ``HERMES_HOME`` and then ``~/.hermes``.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
+        get_hermes_home = None
+    if get_hermes_home is not None:
+        try:
+            home = get_hermes_home()
+            if home:
+                return Path(home).expanduser()
+        except Exception:
+            pass
+    raw = os.environ.get("HERMES_HOME", "").strip()
+    if raw:
+        return Path(os.path.expanduser(raw))
+    return Path.home() / ".hermes"
+
+
 def _default_session_path() -> Path:
     override = os.environ.get(_SESSION_ENV)
     if override:
         return Path(override)
-    home = os.environ.get("HERMES_HOME")
-    base = Path(home) if home else Path.home() / ".hermes"
-    return base / "ghost-run" / "active.json"
+    return _hermes_home_dir() / "ghost-run" / "active.json"
 
 
 @dataclass

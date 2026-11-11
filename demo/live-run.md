@@ -7,6 +7,8 @@
 **Spend:** **$0** (free model route; pricing prompt=0 / completion=0)  
 **Secrets:** none in this file. `HERMES_MODEL_API_KEY` was confirmed set via `test -n` only.
 
+This write-up is a historical log. Current Ghost Run does not copy the main model key into `OPENROUTER_API_KEY`. Advisory notes use `ctx.llm.complete` inside Hermes. The OpenRouter path reads that key only through `agent.secret_scope.get_secret`, and stays off when that module is missing.
+
 ## Setup
 
 1. Confirmed `HERMES_MODEL_API_KEY` set (`echo set`).
@@ -325,5 +327,5 @@ OpenRouter free route → **~$0.00**. Cap on key was $5; unused for paid models.
 - Model: openrouter/free (key not printed)
 - Agent log: `demo/live2-agent.log`
 - Proof: real untouched until selective apply; apply one deletion; discard rest.
-- UI screenshot: `demo/pane.png` (from `demo/run_demo.sh`)
+- UI screenshot from that run was a local `demo/pane.png` and is not committed. The committed shots are in `demo/screenshots/` and are headless Chrome against the loopback page, not Hermes Desktop.
 - Copy timing (~5k files): `demo/copy-timing.json` (hardlink ~0.05s, reflink ~0.09s, copy ~0.26s on this box)

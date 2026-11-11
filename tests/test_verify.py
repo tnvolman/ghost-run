@@ -238,13 +238,16 @@ def test_demo_fixture_verifies_without_install(tmp_path: Path, monkeypatch):
     assert (dest / "index.html").is_file()
 
 
-def _post_json(url: str, payload: dict):
+def _post_json(url: str, payload: dict, token: str = ""):
     import urllib.request
 
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-Ghost-Run-Token"] = token
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=20) as resp:
@@ -262,10 +265,7 @@ def test_ui_verify_is_advisory(project, monkeypatch):
         token = httpd.ghost_token
         base = f"http://127.0.0.1:{port}"
 
-        def u(path: str) -> str:
-            return f"{base}{path}?token={token}"
-
-        with urllib.request.urlopen(u("/"), timeout=5) as resp:
+        with urllib.request.urlopen(base + "/", timeout=5) as resp:
             html = resp.read().decode()
         assert 'id="verifyBtn"' in html
         assert "Apply selected" in html
@@ -274,31 +274,39 @@ def test_ui_verify_is_advisory(project, monkeypatch):
         assert 'id="applyBtn" class="primary"' in html
         assert "applyBtn.disabled" not in html
 
-        missing = _post_json(u("/api/verify"), {})
+        missing = _post_json(base + "/api/verify", {}, token)
         assert missing["ok"] is False
         assert missing["advisory"] is True
         assert missing["verify"]["error"] == NO_TEST_COMMAND
 
         monkeypatch.setenv("GHOST_RUN_TEST", _py("raise SystemExit(7)"))
-        body = _post_json(u("/api/verify"), {})
+        body = _post_json(base + "/api/verify", {}, token)
         # Fail is a completed advisory run, not an HTTP failure, and not a gate.
         assert body["ok"] is True
         assert body["advisory"] is True
         assert body["verify"]["status"] == "fail"
         assert body["verify"]["exit_code"] == 7
 
-        with urllib.request.urlopen(u("/api/diff"), timeout=5) as resp:
+        diff_req = urllib.request.Request(
+            base + "/api/diff",
+            headers={"X-Ghost-Run-Token": token},
+        )
+        with urllib.request.urlopen(diff_req, timeout=5) as resp:
             diff = json.loads(resp.read().decode())
         assert diff["verify"]["status"] == "fail"
 
-        with urllib.request.urlopen(u("/api/verify"), timeout=5) as resp:
+        last_req = urllib.request.Request(
+            base + "/api/verify",
+            headers={"X-Ghost-Run-Token": token},
+        )
+        with urllib.request.urlopen(last_req, timeout=5) as resp:
             last = json.loads(resp.read().decode())
         assert last["verify"]["exit_code"] == 7
 
         apply_req = urllib.request.Request(
-            u("/api/apply"),
+            base + "/api/apply",
             data=json.dumps({"paths": ["keep.txt"]}).encode(),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "X-Ghost-Run-Token": token},
             method="POST",
         )
         with urllib.request.urlopen(apply_req, timeout=5) as resp:
@@ -330,13 +338,17 @@ def test_demo_script_verify_beat_is_advisory_and_before_apply():
     assert "demo-run.log" in script
     assert "npm install" not in script
     assert "node_modules" not in script.split("Beat 6")[1].split("Beat 7")[0]
+    assert "?token=" not in script
+    assert "#token=" in script
+    assert "X-Ghost-Run-Token" in script
 
 
 def test_desktop_pane_has_advisory_verify():
+    page = (ROOT / "ghost_run" / "ui_server.py").read_text(encoding="utf-8")
+    assert "Verify" in page
+    assert "ghost-verify" in page or 'id="verifyBtn"' in page
+    assert "Advisory only" in page
     js = (ROOT / "desktop" / "plugin.js").read_text(encoding="utf-8")
-    assert "Verify" in js
-    assert "ghost-verify" in js
-    assert "does not gate" in js or "Advisory only" in js
-    # Apply selected stays tied to selection / in-flight apply, not verify status.
-    assert "disabled: busy || !changes.length" in js
-    assert "disabled: verifying" in js
+    assert "host.openWorkspace" in js
+    assert "openExternal" in js
+    assert "fetch(" not in js

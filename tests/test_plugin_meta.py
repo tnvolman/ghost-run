@@ -40,6 +40,26 @@ class _Ctx:
         return None
 
 
+def test_register_binds_host_llm_complete():
+    from ghost_run import risk
+
+    ctx = _Ctx()
+
+    class LLM:
+        def complete(self, messages, **kwargs):
+            return "ok"
+
+    ctx.llm = LLM()
+    _plugin_module().register(ctx)
+    try:
+        bound = risk._llm_complete
+        assert bound is not None
+        assert bound.__self__ is ctx.llm
+        assert bound.__func__ is LLM.complete
+    finally:
+        risk.unbind_llm_complete()
+
+
 def test_args_hint_includes_ui_with_existing_subcommands():
     ctx = _Ctx()
     _plugin_module().register(ctx)

@@ -1,13 +1,17 @@
 name: ghost-run
-version: 0.1.0
+version: 0.2.0
+requires_hermes: ">=0.21.7"
 description: >
   Dry-run mode for Hermes Agent. While Ghost Mode is on, file writes/edits/deletes
   and terminal tools are redirected into a throwaway copy of the working folder;
-  network-touching tools and commands are blocked. Review the diff, then apply
-  selected paths or discard. Optional thin Verify runs one configured test in
+  network-touching tools and commands are blocked.   Review the diff, then apply
+  selected paths or discard. The real folder changes only after a person presses Apply or runs `/ghost apply`. Optional thin Verify runs one configured test in
   the ghost copy only after you approve that project (advisory; Apply stays human).
-  Opt-in outbound: set GHOST_RUN_AI=1 to send diffs to OpenRouter for advisory
-  notes. Off by default; nothing is uploaded otherwise.
+  Opt-in outbound: set GHOST_RUN_AI=1 for advisory notes. Inside Hermes those
+  notes use ctx.llm.complete (your provider; the plugin never sees the key).
+  Outside that call, OPENROUTER_API_KEY is read only via agent.secret_scope.
+  If that module is missing, notes stay off. The main model key is never sent.
+  Off by default; nothing is uploaded otherwise.
   Slash: /ghost on|off|status.
   CLI: hermes ghost diff|verify|apply|discard|ui.
 author: "Michael McClanahan (@tnvolman)"
@@ -30,3 +34,8 @@ provides_commands:
   - ghost
 provides_cli_commands:
   - ghost
+known_issues:
+  - "Desktop Load and Apply were not verified in a live Hermes Desktop window. The pane opens the review page in the system browser; Load and Apply run on that page, not inside the pane."
+  - "Advisory OpenRouter notes run only when ctx.llm is unbound and agent.secret_scope.get_secret returns OPENROUTER_API_KEY. Otherwise the notes stay off."
+  - "Checked on Linux. macOS and Windows are untested."
+  - "The demo's headless Chrome fallback puts the review URL, fragment token included, on the browser process command line. curl reads the token from a mode-600 header file that is removed afterwards."

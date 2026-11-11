@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
 
 # Import the library package only (subdirectory ghost_run/), never the plugin
 # root __init__.py as a module under test.
+from ghost_run.risk import _AI_CACHE, unbind_llm_complete  # noqa: E402
 from ghost_run.state import reset_state  # noqa: E402
 from ghost_run.verify import clear_session_approvals  # noqa: E402
 
@@ -25,8 +26,12 @@ def _clean_state(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("GHOST_RUN_SESSION_FILE", str(session))
     reset_state()
     clear_session_approvals()
+    unbind_llm_complete()
+    _AI_CACHE.clear()
     yield
     clear_session_approvals()
+    unbind_llm_complete()
+    _AI_CACHE.clear()
     reset_state()
 
 
