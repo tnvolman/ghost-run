@@ -35,7 +35,7 @@ provides_commands:
 provides_cli_commands:
   - ghost
 known_issues:
-  - "Desktop Load and Apply were not verified in a live Hermes Desktop window. The pane opens the review page in the system browser; Load and Apply run on that page, not inside the pane."
+  - "Verified on macOS in Hermes Desktop v0.23.1 at 54badf24: the pane opens the review page in the system browser; Load, Apply, and the HIGH confirm run on that page, not inside the pane. Checklist: docs/desktop-check.md."
   - "Advisory OpenRouter notes run only when ctx.llm is unbound and agent.secret_scope.get_secret returns OPENROUTER_API_KEY. Otherwise the notes stay off."
-  - "Checked on Linux. macOS and Windows are untested."
+  - "Checked on Linux and macOS (Hermes Desktop v0.23.1 at 54badf24). Windows is untested."
   - "The demo's headless Chrome fallback puts the review URL, fragment token included, on the browser process command line. curl reads the token from a mode-600 header file that is removed afterwards."

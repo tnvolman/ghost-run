@@ -1,6 +1,6 @@
 # Desktop check (about five minutes)
 
-This is for a real Hermes Desktop window, likely on macOS. The shots in `demo/screenshots/` are headless Chrome on the loopback page. They are not this check.
+This is for a real Hermes Desktop window. It was verified on macOS in Hermes Desktop v0.23.1 at 54badf24. The shots `demo/screenshots/desktop-macos-01-review-load.png`, `desktop-macos-02-high-confirm.png`, and `desktop-macos-03-after-cancel.png` are from that check. The older `review-page-load.png` and `review-page-after-apply.png` shots are headless Chrome on Linux. Windows is untested.
 
 Use the commit named in the pull request. Do not use an older copy already sitting in `~/.hermes`.
 
@@ -79,6 +79,7 @@ The system browser should open the review page.
 ## 4. What a pass looks like
 
 - **Open.** A normal browser tab shows the Ghost Run page (file list and diff). The address bar no longer shows `#token=` after the page loads.
+- **Reload.** Reloading the review page (Cmd+R) shows `unauthorized`, because the page removes the token from the address bar after load. Reopen the URL that `hermes ghost ui` printed.
 - **Load.** The page lists `keep.txt` as modified. You did not press Apply.
 - **Before Apply.** `/tmp/ghost-try/keep.txt` still reads `keep`.
 - **Apply.** Select `keep.txt` and press **Apply selected**. The file then reads `ghost`. Nothing else in the folder changes.
