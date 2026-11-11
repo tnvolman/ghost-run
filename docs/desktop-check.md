@@ -22,7 +22,7 @@ Clone this branch and check out the pull-request commit. The full hash is in the
 ```bash
 git clone https://github.com/tnvolman/ghost-run.git
 cd ghost-run
-git fetch origin cursor/ghost-review-blockers-1b18
+git fetch origin main
 git checkout SHA
 git rev-parse HEAD
 ```
