@@ -327,5 +327,5 @@ OpenRouter free route → **~$0.00**. Cap on key was $5; unused for paid models.
 - Model: openrouter/free (key not printed)
 - Agent log: `demo/live2-agent.log`
 - Proof: real untouched until selective apply; apply one deletion; discard rest.
-- UI screenshot from that run was a local `demo/pane.png` and is not committed. The committed shots are in `demo/screenshots/` and are headless Chrome against the loopback page, not Hermes Desktop.
+- UI screenshot from that run was a local `demo/pane.png` and is not committed. The original committed shots in `demo/screenshots/` are headless Chrome against the loopback page. The macOS Hermes Desktop v0.23.1 shots in `demo/screenshots/desktop-macos-*.png` were taken at 54badf24.
 - Copy timing (~5k files): `demo/copy-timing.json` (hardlink ~0.05s, reflink ~0.09s, copy ~0.26s on this box)

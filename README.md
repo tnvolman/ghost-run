@@ -19,7 +19,13 @@ Automated (deterministic) runner:
 # pane.png, and copy-timing.json. The log records Verify Fail, then Apply.
 ```
 
-Committed review-page shots, from headless Chrome against the loopback page, not from Hermes Desktop:
+Committed review-page shots from macOS Chrome, opened by Hermes Desktop v0.23.1 at 54badf24 (`hermes ghost ui` on `/tmp/ghost-risk`):
+
+- [First load](demo/screenshots/desktop-macos-01-review-load.png) — `.env` (HIGH) unticked; MED and LOW ticked.
+- [HIGH confirm](demo/screenshots/desktop-macos-02-high-confirm.png) — "Apply high-risk change(s): .env?".
+- [After Cancel](demo/screenshots/desktop-macos-03-after-cancel.png) — Cancel left all three files pending; nothing was written to disk.
+
+Older headless Chrome shots on Linux, against the same loopback page, not from Hermes Desktop:
 
 - [Load, diff list](demo/screenshots/review-page-load.png)
 - [After Apply](demo/screenshots/review-page-after-apply.png)
@@ -84,7 +90,7 @@ The UI binds to `127.0.0.1` only (`--host localhost` is accepted and bound as `1
 
 `desktop/plugin.js` is a thin pane. It calls `host.openWorkspace` when that function exists (`apps/desktop/src/sdk/index.ts` exports it on `host`), and otherwise `ctx.register({ area: 'panes' })`. The button calls `ctx.os.openExternal` with the pasted loopback URL. The pane does not fetch the review server. The SDK sandboxed iframe is not used: its sandbox is scripts only, so the page inside it would run as an opaque origin and its own fetches would send `Origin: null`.
 
-A live Desktop click-through is in [docs/desktop-check.md](docs/desktop-check.md). It has not been run here.
+A live Desktop click-through is in [docs/desktop-check.md](docs/desktop-check.md). It was verified on macOS in Hermes Desktop v0.23.1 at 54badf24. Windows is untested.
 
 `hermes ghost diff` still writes a static `ghost-run-diff.html` snapshot.
 
